@@ -1,0 +1,38 @@
+[
+  {
+    "date": "2026-04-30",
+    "up_ratio": null,
+    "median_change": null,
+    "dispersion": 0.0,
+    "limit_up_count": 79,
+    "limit_up_density": null,
+    "strong_pool_count": 352,
+    "strong_ratio": 0.8167053364269141,
+    "previous_limit_up_return": 2.7900294362008573,
+    "previous_limit_up_up_ratio": 0.61,
+    "microcap_change": 5.19,
+    "largecap_change": -0.06,
+    "style_spread": 5.25,
+    "sample_size": 0,
+    "universe_size": 0,
+    "source": "realtime_cross_section"
+  },
+  {
+    "date": "2026-05-01",
+    "up_ratio": 60.60606060606061,
+    "median_change": 0.43,
+    "dispersion": 3.607872094023284,
+    "limit_up_count": 79,
+    "limit_up_density": 0.013506582321764405,
+    "strong_pool_count": 352,
+    "strong_ratio": 0.8167053364269141,
+    "previous_limit_up_return": 2.7900294362008573,
+    "previous_limit_up_up_ratio": 0.61,
+    "microcap_change": -1.04,
+    "largecap_change": 0.05,
+    "style_spread": -1.09,
+    "sample_size": 99,
+    "universe_size": 5849,
+    "source": "realtime_cross_section"
+  }
+]

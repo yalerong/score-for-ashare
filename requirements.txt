@@ -1,0 +1,6 @@
+pandas
+numpy
+matplotlib
+akshare
+requests
+curl_cffi

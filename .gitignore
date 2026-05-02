@@ -1,0 +1,27 @@
+# Generated charts
+data/*.png
+
+# Sensitive config
+data/email_config.local.json
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Logs
+logs/
+*.log
+
+# Temp / backup
+*.tmp
+*.bak
+data/*.backup
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
