@@ -1,5 +1,6 @@
 # Generated charts
 data/*.png
+data/fetch_cache/
 
 # Sensitive config
 data/email_config.local.json
@@ -8,6 +9,7 @@ data/email_config.local.json
 __pycache__/
 *.pyc
 venv/
+.venv/
 
 # Logs
 logs/

@@ -351,6 +351,7 @@ class SentimentTracker:
                 "index_close": float(index_row.get("close", 0) or 0),
                 "index_change": float(index_row.get("change_pct", 0) or 0),
                 "daily_return": float(index_row.get("daily_return", 0) or 0),
+                "amount": float(index_row.get("amount", 0) or 0),
                 "volume": float(index_row.get("amount", 0) or 0),
                 "breadth_source": components["market_breadth"].get("source", "unknown"),
                 "cross_section_source": components["cross_section"].get("source", "unknown"),

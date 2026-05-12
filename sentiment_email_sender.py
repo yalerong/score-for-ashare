@@ -136,6 +136,7 @@ def generate_email_content(data):
     level = data["sentiment_level"]
     coverage = data.get("coverage")
     raw = data.get("raw_data", {})
+    amount = raw.get("amount", raw.get("volume"))
 
     if score >= 80:
         color = "#c53030"
@@ -211,7 +212,7 @@ def generate_email_content(data):
                     上证收盘: {_fmt_number(raw.get("index_close"))}<br>
                     指数涨跌: {_fmt_number(raw.get("index_change"), 2, "%")}<br>
                     日收益率: {_fmt_number(raw.get("daily_return", 0) * 100, 2, "%")}<br>
-                    成交额: {_fmt_number((raw.get("volume") or 0) / 1e8, 2, " 亿")}
+                    成交额: {_fmt_number((amount or 0) / 1e8, 2, " 亿")}
                 </div>
             </div>
             <div class="section">
@@ -244,7 +245,7 @@ def generate_email_content(data):
             f"- 上证收盘: {_fmt_number(raw.get('index_close'))}",
             f"- 指数涨跌: {_fmt_number(raw.get('index_change'), 2, '%')}",
             f"- 日收益率: {_fmt_number((raw.get('daily_return', 0) or 0) * 100, 2, '%')}",
-            f"- 成交额: {_fmt_number((raw.get('volume') or 0) / 1e8, 2, ' 亿')}",
+            f"- 成交额: {_fmt_number((amount or 0) / 1e8, 2, ' 亿')}",
             "",
             "解读:",
             get_interpretation(score),

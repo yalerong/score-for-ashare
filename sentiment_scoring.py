@@ -102,7 +102,9 @@ def _safe_rank_ic(signal: pd.Series, returns: pd.Series) -> float | None:
     if len(aligned) < 5:
         return None
 
-    corr = aligned.iloc[:, 0].corr(aligned.iloc[:, 1], method="spearman")
+    signal_rank = aligned.iloc[:, 0].rank(method="average")
+    return_rank = aligned.iloc[:, 1].rank(method="average")
+    corr = signal_rank.corr(return_rank)
     if pd.isna(corr):
         return None
     return float(corr)

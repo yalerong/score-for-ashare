@@ -41,6 +41,26 @@ Eastmoney 全市场 → Sina 全市场 (5511只) → 6指数代理 → 标记缺
 - 离线模式禁止历史回填（`backfill_history` 会直接抛异常）
 - 手动录入模式已接入评分引擎，产出与主流程可比分数
 
+## 数据源限流控制
+
+akshare 接口默认启用本地缓存，缓存目录为 `data/fetch_cache/`：
+
+| 环境变量 | 默认值 | 说明 |
+|----------|--------|------|
+| `SCORE_AKSHARE_CACHE_TTL_SECONDS` | `21600` | 涨停池、强势池等日内缓存时间 |
+| `SCORE_AKSHARE_HISTORY_CACHE_TTL_SECONDS` | `86400` | 北向资金历史缓存时间 |
+| `SCORE_SPOT_CACHE_TTL_SECONDS` | `60` | Eastmoney / Sina 全市场快照短缓存时间 |
+| `SCORE_AKSHARE_ENABLED` | `1` | 设为 `0` 时不主动请求 akshare，只使用已有缓存 |
+| `SCORE_FETCH_CACHE_DIR` | `data/fetch_cache` | 自定义抓取缓存目录 |
+
+同一次运行内，指数 K 线数据会按标的和周期复用，减少 Eastmoney 重复请求。akshare 请求失败时会优先使用旧缓存，避免短期限流导致整个评分失败。
+
+## 取数口径校验
+
+- Eastmoney 指数 K 线 `fields2=f51..f61` 中，`f56` 为成交量，`f57` 为成交额；评分中的 `amount` 必须使用 `f57`，邮件展示成交额也使用 `amount / 1e8`。
+- Eastmoney 全市场快照不可用时，市场广度和横截面情绪都会 fallback 到 Sina 全市场样本，避免横截面只靠涨停池/强势池导致情绪分虚高。
+- 邮件发送脚本只读取已保存的评分结果生成内容；需要只验证不发送时，可直接运行 `SentimentTracker().run()` 并临时替换保存函数。
+
 ## 快速开始
 
 ```bash

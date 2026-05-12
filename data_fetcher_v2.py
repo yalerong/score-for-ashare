@@ -5,9 +5,12 @@ Data fetching utilities for the A-share sentiment tracker.
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -22,6 +25,7 @@ except ImportError:
 
     USE_CURL = False
 
+from config import DATA_DIR
 from sentiment_scoring import summarize_cross_section_state
 
 
@@ -42,6 +46,17 @@ STYLE_INDEX_CODES = {
 }
 
 
+def _env_int(name, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    try:
+        return int(raw_value)
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r, using %s", name, raw_value, default)
+        return default
+
+
 class DataFetcherV2:
     """Fetches market data and builds breadth proxies."""
 
@@ -58,7 +73,85 @@ class DataFetcherV2:
         }
         self._spot_cache = None
         self._spot_cache_ts = 0.0
+        self._index_cache = {}
+        self.cache_dir = Path(os.environ.get("SCORE_FETCH_CACHE_DIR", os.path.join(DATA_DIR, "fetch_cache")))
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.akshare_cache_ttl = _env_int("SCORE_AKSHARE_CACHE_TTL_SECONDS", 21600)
+        self.akshare_history_cache_ttl = _env_int("SCORE_AKSHARE_HISTORY_CACHE_TTL_SECONDS", 86400)
+        self.spot_cache_ttl = _env_int("SCORE_SPOT_CACHE_TTL_SECONDS", 60)
+        self.akshare_enabled = os.environ.get("SCORE_AKSHARE_ENABLED", "1").lower() not in {"0", "false", "no"}
         self.offline_mode = False
+
+    def _cache_path(self, cache_key):
+        safe_key = "".join(char if char.isalnum() or char in "._-" else "_" for char in cache_key)
+        return self.cache_dir / f"{safe_key}.json"
+
+    def _read_cache(self, cache_key, max_age=None, allow_stale=False):
+        path = self._cache_path(cache_key)
+        if not path.exists():
+            return None
+        try:
+            with path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            cached_at = float(payload.get("cached_at", 0))
+            if max_age is not None and time.time() - cached_at > max_age and not allow_stale:
+                return None
+            return payload.get("data")
+        except Exception as exc:
+            logger.warning("Failed to read cache %s: %s", path, exc)
+            return None
+
+    def _write_cache(self, cache_key, data):
+        path = self._cache_path(cache_key)
+        try:
+            tmp_path = path.with_suffix(".tmp")
+            with tmp_path.open("w", encoding="utf-8") as handle:
+                json.dump({"cached_at": time.time(), "data": data}, handle, ensure_ascii=False)
+            os.replace(tmp_path, path)
+        except Exception as exc:
+            logger.warning("Failed to write cache %s: %s", path, exc)
+
+    def _frame_to_cache_data(self, frame):
+        if frame is None:
+            return None
+        clean = frame.astype(object).where(pd.notna(frame), None)
+        records = json.loads(clean.to_json(orient="records", date_format="iso", force_ascii=False))
+        return {"columns": list(clean.columns), "records": records}
+
+    def _cache_data_to_frame(self, data):
+        if data is None:
+            return None
+        return pd.DataFrame(data.get("records", []), columns=data.get("columns"))
+
+    def _read_rows_cache(self, cache_key, max_age=None, allow_stale=False):
+        cached = self._read_cache(cache_key, max_age=max_age, allow_stale=allow_stale)
+        if cached is None:
+            return None, None
+        return cached.get("rows") or [], cached.get("total")
+
+    def _write_rows_cache(self, cache_key, rows, total):
+        if rows:
+            self._write_cache(cache_key, {"rows": rows, "total": total})
+
+    def _fetch_akshare_frame_cached(self, cache_key, fetch_func, ttl_seconds):
+        cached = self._read_cache(cache_key, max_age=ttl_seconds)
+        if cached is not None:
+            return self._cache_data_to_frame(cached)
+
+        if not self.akshare_enabled:
+            stale = self._read_cache(cache_key, allow_stale=True)
+            return self._cache_data_to_frame(stale)
+
+        try:
+            frame = fetch_func()
+            self._write_cache(cache_key, self._frame_to_cache_data(frame))
+            return frame
+        except Exception as exc:
+            stale = self._read_cache(cache_key, allow_stale=True)
+            if stale is not None:
+                logger.warning("Using stale akshare cache for %s after fetch failure: %s", cache_key, exc)
+                return self._cache_data_to_frame(stale)
+            raise
 
     def _make_request(self, url, params=None, headers=None, timeout=15):
         req_headers = headers or self.headers
@@ -78,13 +171,22 @@ class DataFetcherV2:
 
     def get_index_data_range(self, symbol="000001", years=1):
         days = years * 365
+        cache_key = (symbol, days, self.offline_mode)
+        cached = self._index_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
         if self.offline_mode:
-            return self._generate_mock_index_data(days)
+            result = self._generate_mock_index_data(days)
+            self._index_cache[cache_key] = result.copy()
+            return result
         result = self.get_index_data_eastmoney(symbol, days=days)
         if result is not None and not result.empty:
+            self._index_cache[cache_key] = result.copy()
             return result
         logger.warning("Real index data unavailable, falling back to mock data")
-        return self._generate_mock_index_data(days)
+        result = self._generate_mock_index_data(days)
+        self._index_cache[cache_key] = result.copy()
+        return result
 
     def _generate_mock_index_data(self, days=365):
         logger.info("Generating %d days of mock index data", days)
@@ -149,23 +251,9 @@ class DataFetcherV2:
             records = []
             for raw in payload["data"]["klines"]:
                 parts = raw.split(",")
-                if len(parts) < 11:
-                    continue
-                records.append(
-                    {
-                        "date": parts[0],
-                        "open": float(parts[1]),
-                        "close": float(parts[2]),
-                        "high": float(parts[3]),
-                        "low": float(parts[4]),
-                        "amount": float(parts[5]),
-                        "volume": float(parts[6]),
-                        "amplitude": float(parts[7]),
-                        "change_pct": float(parts[8]),
-                        "change": float(parts[9]),
-                        "turnover": float(parts[10]),
-                    }
-                )
+                record = self._parse_eastmoney_kline(parts)
+                if record:
+                    records.append(record)
 
             frame = pd.DataFrame(records)
             if frame.empty:
@@ -177,6 +265,23 @@ class DataFetcherV2:
         except Exception as exc:
             logger.error("Failed to fetch index data for %s: %s", symbol, exc)
             return None
+
+    def _parse_eastmoney_kline(self, parts):
+        if len(parts) < 11:
+            return None
+        return {
+            "date": parts[0],
+            "open": float(parts[1]),
+            "close": float(parts[2]),
+            "high": float(parts[3]),
+            "low": float(parts[4]),
+            "volume": float(parts[5]),
+            "amount": float(parts[6]),
+            "amplitude": float(parts[7]),
+            "change_pct": float(parts[8]),
+            "change": float(parts[9]),
+            "turnover": float(parts[10]),
+        }
 
     def get_index_data_sina(self, symbol="000001"):
         try:
@@ -293,6 +398,10 @@ class DataFetcherV2:
 
     def _fetch_sina_market_snapshot(self):
         """Fallback: fetch all A-share stocks from Sina (different server, no Eastmoney rate limit)."""
+        cached_rows, cached_total = self._read_rows_cache("sina_market_spot", max_age=self.spot_cache_ttl)
+        if cached_rows is not None:
+            return cached_rows, cached_total
+
         url = "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData"
         headers = {
             "User-Agent": self.headers["User-Agent"],
@@ -319,6 +428,9 @@ class DataFetcherV2:
                 batch = response.json()
             except Exception as exc:
                 logger.warning("Sina market snapshot page %d failed: %s", page, exc)
+                stale_rows, stale_total = self._read_rows_cache("sina_market_spot", allow_stale=True)
+                if stale_rows is not None:
+                    return stale_rows, stale_total
                 break
 
             if not batch or not isinstance(batch, list):
@@ -331,6 +443,7 @@ class DataFetcherV2:
 
         if not all_rows:
             return None, None
+        self._write_rows_cache("sina_market_spot", all_rows, len(all_rows))
         return all_rows, len(all_rows)
 
     def _fetch_limit_pool_snapshot(self, date_str):
@@ -340,24 +453,35 @@ class DataFetcherV2:
             logger.warning("akshare not available for limit pool data")
             return None, None, None
 
-        limit_up = None
-        previous_limit = None
-        strong_pool = None
-
         try:
-            limit_up = ak.stock_zt_pool_em(date=date_str)
+            limit_up = self._fetch_akshare_frame_cached(
+                f"ak_limit_up_{date_str}",
+                lambda: ak.stock_zt_pool_em(date=date_str),
+                self.akshare_cache_ttl,
+            )
         except Exception as exc:
             logger.warning("Failed to fetch limit-up pool for %s: %s", date_str, exc)
+            limit_up = None
 
         try:
-            previous_limit = ak.stock_zt_pool_previous_em(date=date_str)
+            previous_limit = self._fetch_akshare_frame_cached(
+                f"ak_previous_limit_{date_str}",
+                lambda: ak.stock_zt_pool_previous_em(date=date_str),
+                self.akshare_cache_ttl,
+            )
         except Exception as exc:
             logger.warning("Failed to fetch previous limit-up pool for %s: %s", date_str, exc)
+            previous_limit = None
 
         try:
-            strong_pool = ak.stock_zt_pool_strong_em(date=date_str)
+            strong_pool = self._fetch_akshare_frame_cached(
+                f"ak_strong_pool_{date_str}",
+                lambda: ak.stock_zt_pool_strong_em(date=date_str),
+                self.akshare_cache_ttl,
+            )
         except Exception as exc:
             logger.warning("Failed to fetch strong pool for %s: %s", date_str, exc)
+            strong_pool = None
 
         return limit_up, previous_limit, strong_pool
 
@@ -389,12 +513,19 @@ class DataFetcherV2:
         if self._spot_cache is not None and (now - self._spot_cache_ts) < ttl:
             return self._spot_cache
 
+        cached_rows, cached_total = self._read_rows_cache("eastmoney_market_spot", max_age=self.spot_cache_ttl)
+        if cached_rows is not None:
+            self._spot_cache = (cached_rows, cached_total)
+            self._spot_cache_ts = now
+            return self._spot_cache
+
         try:
             rows, total = self._fetch_market_spot_snapshot()
         except Exception as exc:
             logger.warning("Failed to fetch market spot snapshot: %s", exc)
             rows, total = None, None
 
+        self._write_rows_cache("eastmoney_market_spot", rows, total)
         self._spot_cache = (rows, total)
         self._spot_cache_ts = now
         return self._spot_cache
@@ -512,6 +643,7 @@ class DataFetcherV2:
         previous_limit_up_return = None
         previous_limit_up_up_ratio = None
         universe_size = None
+        source = "realtime_cross_section"
 
         spot_rows, universe_size = self._get_cached_spot_snapshot()
         if spot_rows:
@@ -520,6 +652,16 @@ class DataFetcherV2:
                 for item in spot_rows
                 if item.get("f3") not in (None, "", "-")
             ]
+        if not spot_changes:
+            sina_rows, sina_total = self._fetch_sina_market_snapshot()
+            if sina_rows:
+                spot_changes = [
+                    float(item["changepercent"])
+                    for item in sina_rows
+                    if item.get("changepercent") not in (None, "", "-")
+                ]
+                universe_size = sina_total
+                source = "sina_cross_section"
 
         limit_up, previous_limit, strong_pool = self._fetch_limit_pool_snapshot(ak_date)
         if limit_up is not None:
@@ -545,7 +687,7 @@ class DataFetcherV2:
             previous_limit_up_up_ratio=previous_limit_up_up_ratio,
             microcap_change=style_data["microcap_change"],
             largecap_change=style_data["largecap_change"],
-            source="realtime_cross_section",
+            source=source,
             universe_size=universe_size,
         )
 
@@ -622,7 +764,11 @@ class DataFetcherV2:
         try:
             import akshare as ak
 
-            frame = ak.stock_hsgt_hist_em(symbol="北向资金")
+            frame = self._fetch_akshare_frame_cached(
+                "ak_north_flow_history_latest",
+                lambda: ak.stock_hsgt_hist_em(symbol="北向资金"),
+                self.akshare_history_cache_ttl,
+            )
             if frame is not None and not frame.empty:
                 latest = frame.iloc[-1]
                 net_flow = float(latest.iloc[1]) * 1e8 if len(latest) > 1 else 0.0
@@ -743,7 +889,11 @@ class DataFetcherV2:
 
             end_date = datetime.now()
             start_date = end_date - timedelta(days=years * 365)
-            frame = ak.stock_hsgt_hist_em(symbol="北向资金")
+            frame = self._fetch_akshare_frame_cached(
+                "ak_north_flow_history_latest",
+                lambda: ak.stock_hsgt_hist_em(symbol="北向资金"),
+                self.akshare_history_cache_ttl,
+            )
             if frame is None or frame.empty:
                 return []
 
