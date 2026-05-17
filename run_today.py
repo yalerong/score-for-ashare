@@ -15,7 +15,7 @@ print("A股情绪指数追踪器 - 计算今日情绪")
 print("=" * 70)
 
 from sentiment_tracker import SentimentTracker
-from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
 # 创建数据获取器（使用真实数据）
 fetcher = DataFetcher()

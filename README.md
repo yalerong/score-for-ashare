@@ -8,13 +8,13 @@ A股市场情绪量化追踪系统，输出 0-100 连续分数作为风险偏好
 
 | 维度 | 权重 | 数据源 | 说明 |
 |------|------|--------|------|
-| market_breadth | 0.25 | Eastmoney / Sina / 指数代理 | 全市场涨跌广度、涨停跌停数 |
-| cross_section | 0.15 | akshare 涨停池 | 涨停生态、强势池、风格差 |
-| volume_change | 0.15 | 指数K线 | 成交额相对历史中位水平 |
-| volatility | 0.15 | 指数K线 | 20日实现波动率（反向） |
-| north_flow | 0.15 | Eastmoney / akshare | 北向资金相对成交额强弱 |
-| margin_trading | 0.10 | SSE + SZSE | 两融净变化相对余额强弱 |
-| trend | 0.05 | 指数K线 | 涨跌幅、20日动量、均线偏离 |
+| market_breadth | 0.25 | tushare `pro.daily` 全市场 | 全市场涨跌广度、涨停跌停数 |
+| cross_section | 0.15 | tushare `pro.daily` (spot 阈值) | 涨停生态、强势池、风格差 |
+| volume_change | 0.15 | tushare `pro.index_daily` | 成交额相对历史中位水平 |
+| volatility | 0.15 | tushare `pro.index_daily` | 20日实现波动率（反向） |
+| north_flow | 0.15 | tushare `pro.moneyflow_hsgt` | 北向资金相对成交额强弱 |
+| margin_trading | 0.10 | tushare `pro.margin` (SSE+SZSE+BSE) | 两融净变化相对余额强弱 |
+| trend | 0.05 | tushare `pro.index_daily` | 涨跌幅、20日动量、均线偏离 |
 
 ## 结果解释
 
@@ -29,16 +29,19 @@ A股市场情绪量化追踪系统，输出 0-100 连续分数作为风险偏好
 **适合的用法**：判断市场风险偏好扩张/收缩期，作为仓位、节奏、风格的参考。
 **不建议**：直接当买卖触发器，或单独依赖短线1-5日预测。
 
-## 数据源与容错
+## 数据源与配置
 
-三级 fallback 确保数据可用性：
+全部数据通过 [tushare pro](https://tushare.pro) 接口获取。Token 加载顺序：
 
-```
-Eastmoney 全市场 → Sina 全市场 (5511只) → 6指数代理 → 标记缺失
-```
+1. 环境变量 `TUSHARE_TOKEN`
+2. 项目根目录的 `.env`：
+   ```
+   TUSHARE_TOKEN=your_token_here
+   ```
 
-- 实时运行时若任何组件为 mock 数据，**拒绝保存到历史库**，防止污染回测
-- 离线模式禁止历史回填（`backfill_history` 会直接抛异常）
+实时与回测使用相同口径（per-stock 全市场 snapshot），不存在"实时维度 ≠ 历史维度"的不对齐问题。
+
+- 历史回填走 `pro.daily(trade_date=...)` 逐日抓取，~3 年约 4 分钟（受默认限速 200/min）
 - 手动录入模式已接入评分引擎，产出与主流程可比分数
 
 ## 数据源限流控制
@@ -124,7 +127,7 @@ python setup_email_scheduler.py
 
 ```
 ├── config.py                    # 全局配置、权重、阈值
-├── data_fetcher_v2.py           # 数据抓取（Eastmoney / Sina / akshare）
+├── data_fetcher_tushare.py      # 数据抓取（tushare pro API）
 ├── sentiment_scoring.py         # 核心评分算法（百分位/线性/组合）
 ├── sentiment_tracker.py         # 主流程编排、历史回填
 ├── market_sentiment_evaluator.py # 回测：Rank IC + 分桶收益
@@ -145,7 +148,6 @@ python setup_email_scheduler.py
 
 ## 已知边界
 
-- 横截面历史缓存日级积累中，回测期 cross_section 无历史数据（实时为 7 维，回测为 6 维）
-- 历史两融仅 SSE 口径（实时为 SSE+SZSE 合并）
+- 北向资金沪深港通日度数据 2024-08 起官方口径变化（看起来已从净流入变为 gross turnover）；保留 tushare 原始值参与百分位评分，相对排名仍有意义
+- 涨停判定使用 spot `pct_chg >= 9.5%` 阈值近似，对创业板/科创板 20% 涨停存在低估（约 2-5% 误差）
 - 分数映射混用百分位与有界线性，详见各模块方法文档
-- Eastmoney clist API 偶发限流，自动 fallback 到 Sina 全市场数据

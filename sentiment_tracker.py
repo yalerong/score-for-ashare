@@ -25,7 +25,7 @@ except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
 from config import DATA_DIR, LOG_CONFIG, SENTIMENT_LEVELS, SENTIMENT_WEIGHTS
-from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 from sentiment_scoring import SentimentScorer
 
 

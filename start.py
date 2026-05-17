@@ -9,14 +9,14 @@ import sys
 def check_dependencies():
     """检查依赖"""
     try:
-        import pandas
-        import numpy
-        import akshare
+        import pandas  # noqa: F401
+        import numpy  # noqa: F401
+        import tushare  # noqa: F401
         print("[OK] 核心依赖已安装")
         return True
     except ImportError as e:
         print(f"[错误] 缺少依赖: {e}")
-        print("请运行: pip install pandas numpy akshare requests schedule tqdm")
+        print("请运行: pip install -r requirements.txt")
         return False
 
 def check_network():
@@ -119,7 +119,7 @@ def main():
     # 处理选择
     if choice == '1':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
         
         fetcher = DataFetcher()
         if not network_ok:
@@ -133,7 +133,7 @@ def main():
     
     elif choice == '2':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
         fetcher = DataFetcher()
         if not network_ok:
@@ -154,7 +154,7 @@ def main():
     
     elif choice == '5':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
         fetcher = DataFetcher()
         if not network_ok:
@@ -167,7 +167,7 @@ def main():
         # 在线模式下的模拟数据选项
         print("\n[模拟模式] 使用随机生成的模拟数据运行")
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
         fetcher = DataFetcher()
         fetcher.enable_offline_mode()

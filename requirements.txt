@@ -1,6 +1,6 @@
 pandas
 numpy
 matplotlib
-akshare
+tushare>=1.4.20
+python-dotenv
 requests
-curl_cffi

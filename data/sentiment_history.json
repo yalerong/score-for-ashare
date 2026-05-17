@@ -40854,13 +40854,13 @@
   {
     "timestamp": "2026-04-30 15:00:00",
     "date": "2026-04-30",
-    "sentiment_score": 57.67,
+    "sentiment_score": 53.77,
     "sentiment_level": "中性",
     "coverage": 1.0,
     "available_components": 7,
     "components": {
-      "market_breadth": 54.34,
-      "cross_section": 89.25,
+      "market_breadth": 54.43,
+      "cross_section": 63.05,
       "volume_change": 82.37,
       "volatility": 47.25,
       "north_flow": 50.0,
@@ -40873,10 +40873,243 @@
       "index_change": 0.11,
       "daily_return": 0.001132072715586796,
       "volume": 656912728.0,
+      "breadth_source": "eastmoney_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-06 15:00:00",
+    "date": "2026-05-06",
+    "sentiment_score": 65.1,
+    "sentiment_level": "偏乐观",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 70.5,
+      "cross_section": 94.37,
+      "volume_change": 86.99,
+      "volatility": 48.99,
+      "north_flow": 50.0,
+      "margin_trading": 14.46,
+      "index_change": 79.52,
+      "trend": 79.52
+    },
+    "raw_data": {
+      "index_close": 4160.17,
+      "index_change": 1.17,
+      "daily_return": 0.011675129372398008,
+      "volume": 701177480.0,
       "breadth_source": "sina_spot",
       "cross_section_source": "realtime_cross_section",
       "north_source": "eastmoney",
-      "margin_source": "sse"
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-07 15:00:00",
+    "date": "2026-05-07",
+    "sentiment_score": 69.43,
+    "sentiment_level": "偏乐观",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 64.66,
+      "cross_section": 72.56,
+      "volume_change": 84.39,
+      "volatility": 62.61,
+      "north_flow": 50.0,
+      "margin_trading": 90.5,
+      "index_change": 75.65,
+      "trend": 75.65
+    },
+    "raw_data": {
+      "index_close": 4180.09,
+      "index_change": 0.48,
+      "daily_return": 0.004788265864135388,
+      "volume": 685574249.0,
+      "breadth_source": "eastmoney_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-08 15:00:00",
+    "date": "2026-05-08",
+    "sentiment_score": 67.16,
+    "sentiment_level": "偏乐观",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 64.84,
+      "cross_section": 65.58,
+      "volume_change": 84.97,
+      "volatility": 62.03,
+      "north_flow": 50.0,
+      "margin_trading": 81.82,
+      "index_change": 67.63,
+      "trend": 67.63
+    },
+    "raw_data": {
+      "index_close": 4179.95,
+      "index_change": 0.0,
+      "daily_return": -3.349210184477869e-05,
+      "volume": 697019094.0,
+      "breadth_source": "eastmoney_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-11 15:00:00",
+    "date": "2026-05-11",
+    "sentiment_score": 67.12,
+    "sentiment_level": "偏乐观",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 56.16,
+      "cross_section": 56.0,
+      "volume_change": 93.35,
+      "volatility": 85.8,
+      "north_flow": 50.0,
+      "margin_trading": 62.66,
+      "index_change": 80.87,
+      "trend": 80.87
+    },
+    "raw_data": {
+      "index_close": 4225.02,
+      "index_change": 1.08,
+      "daily_return": 0.010782425627100967,
+      "volume": 762736287.0,
+      "breadth_source": "sina_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-12 15:00:00",
+    "date": "2026-05-12",
+    "sentiment_score": 56.42,
+    "sentiment_level": "中性",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 19.82,
+      "cross_section": 40.0,
+      "volume_change": 86.42,
+      "volatility": 91.01,
+      "north_flow": 50.0,
+      "margin_trading": 81.4,
+      "index_change": 64.19,
+      "trend": 64.19
+    },
+    "raw_data": {
+      "index_close": 4214.49,
+      "index_change": -0.25,
+      "daily_return": -0.0024922958944574303,
+      "volume": 718984002.0,
+      "breadth_source": "sina_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-13 15:00:00",
+    "date": "2026-05-13",
+    "sentiment_score": 67.92,
+    "sentiment_level": "偏乐观",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 60.27,
+      "cross_section": 60.0,
+      "volume_change": 83.53,
+      "volatility": 90.43,
+      "north_flow": 50.0,
+      "margin_trading": 63.22,
+      "index_change": 78.7,
+      "trend": 78.7
+    },
+    "raw_data": {
+      "index_close": 4242.57,
+      "index_change": 0.67,
+      "daily_return": 0.006662727874547025,
+      "volume": 705018739.0,
+      "breadth_source": "sina_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-14 15:00:00",
+    "date": "2026-05-14",
+    "sentiment_score": 50.92,
+    "sentiment_level": "中性",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 17.9,
+      "cross_section": 35.0,
+      "volume_change": 89.6,
+      "volatility": 69.28,
+      "north_flow": 50.0,
+      "margin_trading": 72.31,
+      "index_change": 52.75,
+      "trend": 52.75
+    },
+    "raw_data": {
+      "index_close": 4177.92,
+      "index_change": -1.52,
+      "daily_return": -0.01523840502337015,
+      "volume": 764235004.0,
+      "breadth_source": "sina_spot",
+      "cross_section_source": "realtime_cross_section",
+      "north_source": "eastmoney",
+      "margin_source": "sse_plus_szse",
+      "index_source": "real"
+    }
+  },
+  {
+    "timestamp": "2026-05-15 15:00:00",
+    "date": "2026-05-15",
+    "sentiment_score": 51.87,
+    "sentiment_level": "中性",
+    "coverage": 1.0,
+    "available_components": 7,
+    "components": {
+      "market_breadth": 25.07,
+      "cross_section": 19.28,
+      "volume_change": 87.19,
+      "volatility": 56.02,
+      "north_flow": 83.47,
+      "margin_trading": 65.7,
+      "index_change": 42.68,
+      "trend": 42.68
+    },
+    "raw_data": {
+      "index_close": 4135.3894,
+      "index_change": -1.0179,
+      "daily_return": -0.010179257967635635,
+      "volume": 1519240026500.0,
+      "breadth_source": "tushare",
+      "cross_section_source": "tushare_cross_section",
+      "north_source": "tushare",
+      "margin_source": "tushare",
+      "index_source": "tushare"
     }
   }
 ]

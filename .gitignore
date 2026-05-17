@@ -3,6 +3,7 @@ data/*.png
 data/fetch_cache/
 
 # Sensitive config
+.env
 data/email_config.local.json
 
 # Python

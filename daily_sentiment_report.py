@@ -16,11 +16,11 @@ def run_daily_report():
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     try:
-        from data_fetcher_v2 import DataFetcherV2
+        from data_fetcher_tushare import DataFetcherTushare
         from sentiment_tracker import SentimentTracker
 
         print("\n[1/2] 计算情绪指标")
-        tracker = SentimentTracker(fetcher=DataFetcherV2())
+        tracker = SentimentTracker(fetcher=DataFetcherTushare())
         result = tracker.run()
         print(f"总分: {result['sentiment_score']:.2f}")
         print(f"等级: {result['sentiment_level']}")

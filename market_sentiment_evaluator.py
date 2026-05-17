@@ -11,7 +11,7 @@ from pathlib import Path
 import pandas as pd
 
 from config import DATA_DIR
-from data_fetcher_v2 import DataFetcherV2
+from data_fetcher_tushare import DataFetcherTushare as DataFetcherV2
 from sentiment_scoring import build_forward_return_frame, evaluate_signal_against_returns
 
 
