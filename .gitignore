@@ -29,3 +29,14 @@ data/*.backup
 # OS
 Thumbs.db
 Desktop.ini
+
+# 本地打包/启动辅助脚本(Windows 端,不参与运行时)
+A股情绪指标追踪器_*.zip
+安装依赖.bat
+启动程序.bat
+创建定时任务.bat
+清理测试文件.bat
+打包项目.bat
+打包项目.py
+打包说明.md
+检查环境.py
