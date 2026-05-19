@@ -6,6 +6,20 @@
 import os
 import sys
 
+
+def create_fetcher(offline=False):
+    if offline:
+        from data_fetcher_v2 import DataFetcherV2 as DataFetcher
+
+        fetcher = DataFetcher()
+        fetcher.enable_offline_mode()
+        return fetcher
+
+    from data_fetcher_tushare import DataFetcherTushare as DataFetcher
+
+    return DataFetcher()
+
+
 def check_dependencies():
     """检查依赖"""
     try:
@@ -119,12 +133,8 @@ def main():
     # 处理选择
     if choice == '1':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
         
-        fetcher = DataFetcher()
-        if not network_ok:
-            print("\n[提示] 网络受限，启用离线模拟模式")
-            fetcher.enable_offline_mode()
+        fetcher = create_fetcher(offline=not network_ok)
         
         tracker = SentimentTracker(fetcher=fetcher)
         result = tracker.run()
@@ -133,14 +143,13 @@ def main():
     
     elif choice == '2':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
-        fetcher = DataFetcher()
-        if not network_ok:
-            print("\n[提示] 网络受限，启用离线模拟模式")
-            fetcher.enable_offline_mode()
+        fetcher = create_fetcher(offline=not network_ok)
 
         tracker = SentimentTracker(fetcher=fetcher)
+        if tracker.fetcher.offline_mode:
+            print("\n[提示] 历史回填需要真实 Tushare 数据，不会保存模拟历史数据。")
+            return
         tracker.backfill_history(days=1100)
     
     elif choice == '3':
@@ -154,11 +163,8 @@ def main():
     
     elif choice == '5':
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 
-        fetcher = DataFetcher()
-        if not network_ok:
-            fetcher.enable_offline_mode()
+        fetcher = create_fetcher(offline=not network_ok)
 
         tracker = SentimentTracker(fetcher=fetcher)
         tracker.realtime_monitor()
@@ -167,10 +173,7 @@ def main():
         # 在线模式下的模拟数据选项
         print("\n[模拟模式] 使用随机生成的模拟数据运行")
         from sentiment_tracker import SentimentTracker
-        from data_fetcher_tushare import DataFetcherTushare as DataFetcher
-
-        fetcher = DataFetcher()
-        fetcher.enable_offline_mode()
+        fetcher = create_fetcher(offline=True)
         
         print("\n选择模拟操作:")
         print("1. 计算今日模拟情绪")
@@ -185,7 +188,7 @@ def main():
             if result:
                 print(f"\n模拟结果: {result['sentiment_score']:.1f}分")
         elif mock_choice == '2':
-            tracker.backfill_history(days=1100)
+            print("\n[提示] 历史回填需要真实 Tushare 数据，不会保存模拟历史数据。")
         else:
             print("无效选项")
     

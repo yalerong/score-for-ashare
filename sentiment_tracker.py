@@ -34,11 +34,16 @@ logger = logging.getLogger(__name__)
 
 class SentimentTracker:
     def __init__(self, fetcher=None):
-        self.fetcher = fetcher if fetcher else DataFetcher()
+        self.fetcher = fetcher
         self.scorer = SentimentScorer()
         self.data_file = os.path.join(DATA_DIR, "sentiment_history.json")
         self.cross_section_file = os.path.join(DATA_DIR, "cross_section_history.json")
         self.history = self.load_history()
+
+    def _get_fetcher(self):
+        if self.fetcher is None:
+            self.fetcher = DataFetcher()
+        return self.fetcher
 
     def load_history(self):
         if os.path.exists(self.data_file):
@@ -368,22 +373,27 @@ class SentimentTracker:
         return "中性"
 
     def backfill_history(self, days=1100, symbol="000001"):
-        if self.fetcher.offline_mode:
+        fetcher = self._get_fetcher()
+        if fetcher.offline_mode:
             raise RuntimeError(
                 "Backfill is disabled in offline/mock mode to prevent data contamination."
             )
         years = max(1, math.ceil(days / 365))
-        index_df = self.fetcher.get_index_data_range(symbol, years=years)
+        index_df = fetcher.get_index_data_range(symbol, years=years)
         if index_df is None or index_df.empty:
             raise RuntimeError("Unable to fetch index history for backfill.")
 
         index_df = self._prepare_index_features(index_df)
-        breadth_history = self.fetcher.get_market_breadth_history(years=years)
+        breadth_history = fetcher.get_market_breadth_history(years=years)
         breadth_lookup = {item["date"]: item for item in breadth_history}
-        cross_section_history = []
-        north_history = self.fetcher.get_north_flow_historical(years=years)
+        if hasattr(fetcher, "get_cross_sectional_state_history"):
+            cross_section_history = fetcher.get_cross_sectional_state_history(years=years)
+        else:
+            cross_section_history = []
+        cross_section_lookup = {item["date"]: item for item in cross_section_history}
+        north_history = fetcher.get_north_flow_historical(years=years)
         north_lookup = self._build_history_lookup(north_history, ["flow", "net_flow"])
-        margin_history = self.fetcher.get_margin_trading_historical(years=years)
+        margin_history = fetcher.get_margin_trading_historical(years=years)
         margin_lookup = self._build_history_lookup(margin_history, ["margin_balance", "net_change"])
 
         results = []
@@ -394,12 +404,12 @@ class SentimentTracker:
                 date_str=date_str,
                 index_row=row,
                 breadth_data=breadth_lookup.get(date_str),
-                cross_section_data=None,
+                cross_section_data=cross_section_lookup.get(date_str),
                 north_flow=north_lookup.get(date_str),
                 margin_data=margin_lookup.get(date_str),
                 history_frame=history_slice,
                 breadth_history=[item for item in breadth_history if item["date"] <= date_str],
-                cross_section_history=cross_section_history,
+                cross_section_history=[item for item in cross_section_history if item["date"] <= date_str],
                 margin_lookup={k: v for k, v in margin_lookup.items() if k <= date_str},
                 north_lookup=north_lookup,
             )
@@ -413,7 +423,8 @@ class SentimentTracker:
         return results
 
     def fetch_all_data(self):
-        index_df = self.fetcher.get_index_data_range("000001", years=1)
+        fetcher = self._get_fetcher()
+        index_df = fetcher.get_index_data_range("000001", years=1)
         if index_df is not None and not index_df.empty:
             index_df = self._prepare_index_features(index_df)
             latest_trade_date = index_df.iloc[-1]["date"]
@@ -421,15 +432,15 @@ class SentimentTracker:
             latest_trade_date = datetime.now().strftime("%Y-%m-%d")
 
         return {
-            "breadth": self.fetcher.get_market_breadth(date=latest_trade_date),
-            "breadth_history": self.fetcher.get_market_breadth_history(years=1),
-            "cross_section": self.fetcher.get_cross_sectional_state(date=latest_trade_date),
+            "breadth": fetcher.get_market_breadth(date=latest_trade_date),
+            "breadth_history": fetcher.get_market_breadth_history(years=1),
+            "cross_section": fetcher.get_cross_sectional_state(date=latest_trade_date),
             "cross_section_history": self._load_cross_section_history(),
             "index_data": index_df,
-            "north": self.fetcher.get_north_flow(),
-            "north_history": self.fetcher.get_north_flow_historical(years=1),
-            "margin": self.fetcher.get_margin_trading(),
-            "margin_history": self.fetcher.get_margin_trading_historical(years=1),
+            "north": fetcher.get_north_flow(),
+            "north_history": fetcher.get_north_flow_historical(years=1),
+            "margin": fetcher.get_margin_trading(),
+            "margin_history": fetcher.get_margin_trading_historical(years=1),
         }
 
     def calculate_sentiment(self):

@@ -255,14 +255,12 @@ class DataFetcherTushare:
                 logger.info("Breadth history: %d/%d", i + 1, len(dates))
         return results
 
-    def _fetch_style_snapshot(self, date_iso: str):
-        try:
-            micro_df = self.get_index_data_range(STYLE_INDEX_CODES["microcap"], years=1)
-            large_df = self.get_index_data_range(STYLE_INDEX_CODES["largecap"], years=1)
-        except Exception as exc:
-            logger.warning("style snapshot failed: %s", exc)
-            return {"microcap_change": None, "largecap_change": None}
-
+    def _style_from_frames(
+        self,
+        date_iso: str,
+        micro_df: Optional[pd.DataFrame],
+        large_df: Optional[pd.DataFrame],
+    ):
         def _pick(frame: Optional[pd.DataFrame]) -> Optional[float]:
             if frame is None or frame.empty:
                 return None
@@ -276,14 +274,23 @@ class DataFetcherTushare:
             "largecap_change": _pick(large_df),
         }
 
-    def get_cross_sectional_state(self, date: Optional[str] = None):
-        date_iso = date or self._latest_trade_date_iso()
-        yyyymmdd = _yyyymmdd(date_iso)
+    def _fetch_style_snapshot(self, date_iso: str):
+        try:
+            micro_df = self.get_index_data_range(STYLE_INDEX_CODES["microcap"], years=1)
+            large_df = self.get_index_data_range(STYLE_INDEX_CODES["largecap"], years=1)
+        except Exception as exc:
+            logger.warning("style snapshot failed: %s", exc)
+            return {"microcap_change": None, "largecap_change": None}
 
-        spot = self._get_spot(yyyymmdd)
-        if spot is None or spot.empty:
-            return None
+        return self._style_from_frames(date_iso, micro_df, large_df)
 
+    def _cross_section_from_spot(
+        self,
+        date_iso: str,
+        spot: pd.DataFrame,
+        previous_spot: Optional[pd.DataFrame] = None,
+        style: Optional[dict] = None,
+    ):
         spot_changes = spot["pct_chg"].dropna().tolist()
         universe_size = int(len(spot))
         s = spot["pct_chg"]
@@ -292,19 +299,15 @@ class DataFetcherTushare:
 
         previous_limit_up_return = None
         previous_limit_up_up_ratio = None
-        prev = self._previous_trade_date(yyyymmdd)
-        if prev:
-            prev_spot = self._get_spot(prev)
-            if prev_spot is not None and not prev_spot.empty:
-                prev_limit_codes = prev_spot[prev_spot["pct_chg"] >= 9.5]["ts_code"]
-                if not prev_limit_codes.empty:
-                    today_perf = spot[spot["ts_code"].isin(prev_limit_codes)]["pct_chg"].dropna()
-                    if not today_perf.empty:
-                        previous_limit_up_return = float(today_perf.mean())
-                        previous_limit_up_up_ratio = float((today_perf > 0).mean())
+        if previous_spot is not None and not previous_spot.empty:
+            prev_limit_codes = previous_spot[previous_spot["pct_chg"] >= 9.5]["ts_code"]
+            if not prev_limit_codes.empty:
+                today_perf = spot[spot["ts_code"].isin(prev_limit_codes)]["pct_chg"].dropna()
+                if not today_perf.empty:
+                    previous_limit_up_return = float(today_perf.mean())
+                    previous_limit_up_up_ratio = float((today_perf > 0).mean())
 
-        style = self._fetch_style_snapshot(date_iso)
-
+        style = style or {"microcap_change": None, "largecap_change": None}
         return summarize_cross_section_state(
             date=date_iso,
             spot_changes=spot_changes,
@@ -317,6 +320,50 @@ class DataFetcherTushare:
             largecap_change=style["largecap_change"],
             source="tushare_cross_section",
         )
+
+    def get_cross_sectional_state(self, date: Optional[str] = None):
+        date_iso = date or self._latest_trade_date_iso()
+        yyyymmdd = _yyyymmdd(date_iso)
+
+        spot = self._get_spot(yyyymmdd)
+        if spot is None or spot.empty:
+            return None
+
+        prev = self._previous_trade_date(yyyymmdd)
+        prev_spot = None
+        if prev:
+            prev_spot = self._get_spot(prev)
+
+        style = self._fetch_style_snapshot(date_iso)
+        return self._cross_section_from_spot(date_iso, spot, prev_spot, style)
+
+    def get_cross_sectional_state_history(self, years: int = 3):
+        end = datetime.now()
+        start = end - timedelta(days=years * 365)
+        cal = self._get_trade_cal()
+        start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+        dates = [d for d in cal if start_s <= d <= end_s]
+        logger.info("Fetching cross-section history for %d trade dates", len(dates))
+
+        try:
+            micro_df = self.get_index_data_range(STYLE_INDEX_CODES["microcap"], years=years)
+            large_df = self.get_index_data_range(STYLE_INDEX_CODES["largecap"], years=years)
+        except Exception as exc:
+            logger.warning("style history failed: %s", exc)
+            micro_df = None
+            large_df = None
+
+        results = []
+        for i, d in enumerate(dates):
+            spot = self._get_spot(d)
+            if spot is None or spot.empty:
+                continue
+            prev_spot = self._get_spot(dates[i - 1]) if i > 0 else None
+            style = self._style_from_frames(_iso(d), micro_df, large_df)
+            results.append(self._cross_section_from_spot(_iso(d), spot, prev_spot, style))
+            if (i + 1) % 50 == 0:
+                logger.info("Cross-section history: %d/%d", i + 1, len(dates))
+        return results
 
     def get_north_flow(self):
         try:
