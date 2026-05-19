@@ -99,6 +99,27 @@ python manual_input.py
 | `SMTP_PORT` | SMTP 端口（默认 465） |
 | `SMTP_USE_SSL` | 是否 SSL（默认 true） |
 
+## 微信公众号配置
+
+个人订阅号可用于每天自动生成一篇短日报。默认行为是创建公众号草稿；如果账号接口权限允许，可通过开关继续尝试发布或群发。
+
+| 环境变量 | 说明 |
+|----------|------|
+| `WECHAT_MP_APPID` | 公众号 AppID |
+| `WECHAT_MP_SECRET` | 公众号 AppSecret，只放本地 `.env`，不要提交 |
+| `WECHAT_MP_AUTHOR` | 作者名，默认 `持志堂` |
+| `WECHAT_MP_THUMB_MEDIA_ID` | 已上传的永久封面素材 media_id，可选 |
+| `WECHAT_MP_COVER_IMAGE` | 本地封面图路径，可选；未设置时会自动生成默认封面并上传 |
+| `WECHAT_MP_CONTENT_SOURCE_URL` | 原文链接，可选 |
+| `WECHAT_MP_AUTO_PUBLISH` | 是否创建草稿后调用发布接口，默认 `false` |
+| `WECHAT_MP_AUTO_MASS_SEND` | 是否继续尝试群发接口，默认 `false` |
+
+单独创建草稿：
+
+```bash
+python sentiment_wechat_mp_sender.py
+```
+
 ## 定时任务
 
 Windows Task Scheduler：

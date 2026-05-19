@@ -19,7 +19,7 @@ def run_daily_report():
         from data_fetcher_tushare import DataFetcherTushare
         from sentiment_tracker import SentimentTracker
 
-        print("\n[1/2] 计算情绪指标")
+        print("\n[1/3] 计算情绪指标")
         tracker = SentimentTracker(fetcher=DataFetcherTushare())
         result = tracker.run()
         print(f"总分: {result['sentiment_score']:.2f}")
@@ -29,14 +29,25 @@ def run_daily_report():
         print(f"[FAIL] 情绪计算失败: {exc}")
         return False
 
+    sent = False
+
     try:
         from sentiment_email_sender import main as send_email_main
 
-        print("\n[2/2] 发送邮件")
-        return bool(send_email_main())
+        print("\n[2/3] 发送邮件")
+        sent = bool(send_email_main()) or sent
     except Exception as exc:
         print(f"[FAIL] 邮件发送失败: {exc}")
-        return False
+
+    try:
+        from sentiment_wechat_mp_sender import main as send_wechat_mp_main
+
+        print("\n[3/3] 微信公众号草稿/发布")
+        sent = bool(send_wechat_mp_main()) or sent
+    except Exception as exc:
+        print(f"[FAIL] 微信公众号发送失败: {exc}")
+
+    return sent
 
 
 if __name__ == "__main__":
