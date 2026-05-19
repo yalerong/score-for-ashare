@@ -9,11 +9,29 @@ import sys
 from datetime import datetime
 
 
+def _is_a_share_trading_day():
+    from data_fetcher_tushare import ensure_token, get_pro_api
+
+    ensure_token()
+    today = datetime.now().strftime("%Y%m%d")
+    df = get_pro_api().trade_cal(exchange="SSE", start_date=today, end_date=today)
+    if df.empty:
+        return True
+    return int(df.iloc[0]["is_open"]) == 1
+
+
 def run_daily_report():
     print("=" * 70)
     print("A股情绪指标 - 每日报告")
     print("=" * 70)
     print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    try:
+        if not _is_a_share_trading_day():
+            print("\n[SKIP] 今天不是 A 股交易日(节假日/调休),跳过")
+            return False
+    except Exception as exc:
+        print(f"[WARN] 交易日检查失败,继续按原流程跑: {exc}")
 
     try:
         from data_fetcher_tushare import DataFetcherTushare
