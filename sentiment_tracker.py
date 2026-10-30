@@ -114,7 +114,9 @@ class SentimentTracker:
         }
         missing = [date for date in needed_dates if date not in cached or date >= today]
         if len(missing) > INCREMENTAL_FETCH_LIMIT:
-            return fetch_bulk()
+            # The cache-only fallback may hold rows for non-trading days or legacy sources.
+            needed = set(needed_dates)
+            return [row for row in fetch_bulk() if row.get("date") in needed]
         for date in missing:
             row = fetch_one(date)
             if row:
