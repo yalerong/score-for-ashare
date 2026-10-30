@@ -31,6 +31,9 @@ from sentiment_scoring import SentimentScorer
 
 logger = logging.getLogger(__name__)
 
+# More missing days than this (first run, long gap) are fetched with the bulk history call.
+INCREMENTAL_FETCH_LIMIT = 20
+
 
 class SentimentTracker:
     def __init__(self, fetcher=None):
@@ -38,6 +41,7 @@ class SentimentTracker:
         self.scorer = SentimentScorer()
         self.data_file = os.path.join(DATA_DIR, "sentiment_history.json")
         self.cross_section_file = os.path.join(DATA_DIR, "cross_section_history.json")
+        self.breadth_file = os.path.join(DATA_DIR, "breadth_history.json")
         self.history = self.load_history()
 
     def _get_fetcher(self):
@@ -64,14 +68,34 @@ class SentimentTracker:
             logger.error("Failed to save sentiment history: %s", exc)
             raise
 
-    def _load_cross_section_history(self):
-        if os.path.exists(self.cross_section_file):
+    def _load_daily_rows(self, path):
+        if os.path.exists(path):
             try:
-                with open(self.cross_section_file, "r", encoding="utf-8") as handle:
+                with open(path, "r", encoding="utf-8") as handle:
                     return json.load(handle)
             except Exception as exc:
-                logger.error("Failed to load cross_section history: %s", exc)
+                logger.error("Failed to load %s: %s", path, exc)
         return []
+
+    def _save_daily_rows(self, path, rows):
+        # Today's snapshot may still be arriving; only persist completed days.
+        today = datetime.now().strftime("%Y-%m-%d")
+        rows = [item for item in rows or [] if item.get("date") and item["date"] < today]
+        if not rows:
+            return
+        history = {item["date"]: item for item in self._load_daily_rows(path) if item.get("date")}
+        history.update({item["date"]: item for item in rows})
+        try:
+            tmp_path = f"{path}.tmp"
+            with open(tmp_path, "w", encoding="utf-8") as handle:
+                json.dump([history[date] for date in sorted(history)], handle, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        except Exception as exc:
+            logger.error("Failed to save %s: %s", path, exc)
+            raise
+
+    def _load_cross_section_history(self):
+        return self._load_daily_rows(self.cross_section_file)
 
     def _save_cross_section(self, cross_section_data):
         if not cross_section_data:
@@ -79,18 +103,23 @@ class SentimentTracker:
         self._save_cross_section_history([cross_section_data])
 
     def _save_cross_section_history(self, rows):
-        if not rows:
-            return
-        history = {item["date"]: item for item in self._load_cross_section_history() if item.get("date")}
-        history.update({item["date"]: item for item in rows if item.get("date")})
-        try:
-            tmp_path = f"{self.cross_section_file}.tmp"
-            with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump([history[date] for date in sorted(history)], handle, ensure_ascii=False, indent=2)
-            os.replace(tmp_path, self.cross_section_file)
-        except Exception as exc:
-            logger.error("Failed to save cross_section history: %s", exc)
-            raise
+        self._save_daily_rows(self.cross_section_file, rows)
+
+    def _incremental_daily_rows(self, path, needed_dates, fetch_one, fetch_bulk, is_complete=lambda row: True):
+        """Reuse persisted completed days; fetch missing, incomplete or still-current dates."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        cached = {
+            item["date"]: item for item in self._load_daily_rows(path)
+            if item.get("date") in needed_dates and is_complete(item)
+        }
+        missing = [date for date in needed_dates if date not in cached or date >= today]
+        if len(missing) > INCREMENTAL_FETCH_LIMIT:
+            return fetch_bulk()
+        for date in missing:
+            row = fetch_one(date)
+            if row:
+                cached[date] = row
+        return [cached[date] for date in sorted(cached)]
 
     def _normalize_weight_keys(self):
         weights = dict(SENTIMENT_WEIGHTS)
@@ -491,6 +520,7 @@ class SentimentTracker:
         self.history = [existing[key] for key in sorted(existing)]
         self.save_history()
         self._save_cross_section_history(cross_section_history)
+        self._save_daily_rows(self.breadth_file, breadth_history)
         return results
 
     def fetch_all_data(self):
@@ -502,16 +532,41 @@ class SentimentTracker:
         else:
             latest_trade_date = datetime.now().strftime("%Y-%m-%d")
 
-        cross_section = fetcher.get_cross_sectional_state(date=latest_trade_date)
-        if hasattr(fetcher, "get_cross_sectional_state_history"):
-            cross_section_history = fetcher.get_cross_sectional_state_history(years=2)
+        # Calibration only needs the trailing 365 calendar days of trading dates.
+        window_start = (pd.Timestamp(latest_trade_date) - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
+        if index_df is not None and not index_df.empty:
+            needed_dates = [date for date in index_df["date"] if window_start < date <= latest_trade_date]
         else:
-            cross_section_history = self._load_cross_section_history()
+            needed_dates = [latest_trade_date]
+
+        breadth_history = self._incremental_daily_rows(
+            self.breadth_file,
+            needed_dates,
+            lambda date: fetcher.get_market_breadth(date=date),
+            lambda: fetcher.get_market_breadth_history(years=2),
+        )
+        if hasattr(fetcher, "get_cross_sectional_state_history"):
+            fetch_cross_section_bulk = lambda: fetcher.get_cross_sectional_state_history(years=2)  # noqa: E731
+        else:
+            fetch_cross_section_bulk = self._load_cross_section_history
+        cross_section_history = self._incremental_daily_rows(
+            self.cross_section_file,
+            needed_dates,
+            lambda date: fetcher.get_cross_sectional_state(date=date),
+            fetch_cross_section_bulk,
+            # A failed style-index request leaves these empty; retry such rows on later runs.
+            lambda row: row.get("microcap_change") is not None and row.get("largecap_change") is not None,
+        )
+        if not any(item["date"] == latest_trade_date for item in cross_section_history):
+            # The cache-only fallback has no current row; fetch it directly.
+            current = fetcher.get_cross_sectional_state(date=latest_trade_date)
+            if current:
+                cross_section_history = sorted(cross_section_history + [current], key=lambda item: item["date"])
 
         return {
-            "breadth": fetcher.get_market_breadth(date=latest_trade_date),
-            "breadth_history": fetcher.get_market_breadth_history(years=2),
-            "cross_section": cross_section,
+            "breadth": next((item for item in breadth_history if item["date"] == latest_trade_date), None),
+            "breadth_history": breadth_history,
+            "cross_section": next((item for item in cross_section_history if item["date"] == latest_trade_date), None),
             "cross_section_history": cross_section_history,
             "index_data": index_df,
             "north": fetcher.get_north_flow(),
@@ -597,6 +652,7 @@ class SentimentTracker:
             self.save_result(result)
             self._save_cross_section_history(components["cross_section_history"])
             self._save_cross_section(components["cross_section"])
+            self._save_daily_rows(self.breadth_file, components["breadth_history"])
         return result
 
     def realtime_monitor(self, iterations=None, sleep_seconds=300):

@@ -93,7 +93,7 @@ pip install -r requirements.txt
 python run_today.py
 ```
 
-程序将结果写入 `data/sentiment_history.json`，横截面缓存写入 `data/cross_section_history.json`。需要检查模型、日期、分项和覆盖率时可直接调用：
+程序将结果写入 `data/sentiment_history.json`，广度与横截面缓存分别写入 `data/breadth_history.json`、`data/cross_section_history.json`。日常运行复用缓存中已完成的交易日，只补拉缺失日期和当天（当天快照可能仍在入库，不落盘）；缺失超过20个交易日（首次运行或长时间未运行）时整段拉取近2年。修改广度/横截面特征定义后，需删除这两个缓存或重新回填。需要检查模型、日期、分项和覆盖率时可直接调用：
 
 ```python
 from sentiment_tracker import SentimentTracker
@@ -205,7 +205,7 @@ python setup_email_scheduler.py
 python -m unittest discover -s tests -v
 ```
 
-当前63项测试覆盖量价方向单调性、正负对称、平盘与退化历史、北向排除、版本混用拒绝、日常/历史评分一致、日期对齐、融资完整性、缓存重试、保存失败和分桶等。已有验证还包括6个修改模块的类型检查及Ruff运行时错误检查；它们不构成投资预测能力验证。
+当前67项测试覆盖量价方向单调性、正负对称、平盘与退化历史、北向排除、版本混用拒绝、日常/历史评分一致、日期对齐、融资完整性、缓存重试、保存失败和分桶等。已有验证还包括6个修改模块的类型检查及Ruff运行时错误检查；它们不构成投资预测能力验证。
 
 ## 文件结构
 
@@ -226,6 +226,7 @@ python -m unittest discover -s tests -v
 ├── requirements.txt              # Python 依赖
 ├── data/                         # 历史数据与缓存
 │   ├── sentiment_history.json        # 情绪历史库
+│   ├── breadth_history.json          # 广度历史缓存（本地生成，不提交）
 │   └── cross_section_history.json    # 横截面历史缓存
 └── tests/                        # 单元测试
 ```

@@ -49,6 +49,8 @@ class FakeHistoryFetcher:
                 universe_size=4,
                 limit_up_count=i,
                 strong_pool_count=2,
+                microcap_change=0.1 * i,
+                largecap_change=0.0,
                 source="test_cross_section",
             )
             for i, date in enumerate(self.dates)
@@ -147,7 +149,8 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
             self.assertEqual(len(tracker.history), 4)
             with open(tracker.cross_section_file, encoding="utf-8") as handle:
                 cached = json.load(handle)
-            self.assertEqual(len(cached), len(fetcher.dates))
+            # The clock's current day may still be incomplete and is not persisted.
+            self.assertEqual([item["date"] for item in cached], fetcher.dates[:-1])
 
     def test_daily_and_backfill_calibration_agree_after_nontrading_days(self):
         class WeekendFetcher(FakeHistoryFetcher):
@@ -164,7 +167,7 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
                 return self.recent(rows, years)
 
             def get_cross_sectional_state_history(self, years=1):
-                return self.get_market_breadth_history(years)
+                return [dict(row, microcap_change=0.0, largecap_change=0.0) for row in self.get_market_breadth_history(years)]
 
             def get_north_flow_historical(self, years=1):
                 return self.recent(super().get_north_flow_historical(years), years)
@@ -296,6 +299,94 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
 
             self.assertFalse(daily["component_availability"]["margin_trading"])
             self.assertIsNone(daily["components"]["margin_trading"])
+
+    def test_daily_run_fetches_only_uncached_days(self):
+        class CountingFetcher(FakeHistoryFetcher):
+            def __init__(self):
+                super().__init__()
+                self.calls = []
+
+            def get_market_breadth_history(self, years=1):
+                self.calls.append("breadth_bulk")
+                return super().get_market_breadth_history(years)
+
+            def get_cross_sectional_state_history(self, years=1):
+                self.calls.append("cross_section_bulk")
+                return super().get_cross_sectional_state_history(years)
+
+            def get_market_breadth(self, date=None):
+                self.calls.append(("breadth", date))
+                return next(item for item in FakeHistoryFetcher.get_market_breadth_history(self) if item["date"] == date)
+
+            def get_cross_sectional_state(self, date=None):
+                self.calls.append(("cross_section", date))
+                return next(item for item in FakeHistoryFetcher.get_cross_sectional_state_history(self) if item["date"] == date)
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir), patch("sentiment_tracker.datetime") as clock:
+            fetcher = CountingFetcher()
+            tracker = SentimentTracker(fetcher=fetcher)
+            clock.now.return_value = datetime(2026, 5, 8, 17)
+            first = tracker.run()
+
+            clock.now.return_value = datetime(2026, 5, 9, 9)
+            fetcher.calls.clear()
+            second = tracker.run()
+
+            # Only 2026-05-08 was still "today" on the first run, so only it is refetched.
+            self.assertEqual(fetcher.calls, [("breadth", "2026-05-08"), ("cross_section", "2026-05-08")])
+            self.assertEqual(first["components"], second["components"])
+            with open(tracker.breadth_file, encoding="utf-8") as handle:
+                self.assertEqual([item["date"] for item in json.load(handle)], fetcher.dates)
+
+    def test_cached_cross_section_without_style_is_refetched(self):
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
+            fetcher = FakeHistoryFetcher()
+            tracker = SentimentTracker(fetcher=fetcher)
+            stale = dict(fetcher.get_cross_sectional_state(date=fetcher.dates[3]), microcap_change=None, style_spread=None)
+            tracker._save_cross_section_history(fetcher.get_cross_sectional_state_history())
+            tracker._save_cross_section_history([stale])
+
+            requested = []
+            original = fetcher.get_cross_sectional_state
+            fetcher.get_cross_sectional_state = lambda date=None: requested.append(date) or original(date=date)
+            data = tracker.fetch_all_data()
+
+            self.assertIn(fetcher.dates[3], requested)
+            row = next(item for item in data["cross_section_history"] if item["date"] == fetcher.dates[3])
+            self.assertIsNotNone(row["style_spread"])
+
+    def test_current_cross_section_fetched_without_bulk_history(self):
+        class NoBulkFetcher:
+            offline_mode = False
+
+            def __init__(self):
+                self.inner = FakeHistoryFetcher()
+                self.dates = self.inner.dates
+
+            def __getattr__(self, name):
+                if name == "get_cross_sectional_state_history":
+                    raise AttributeError(name)
+                return getattr(self.inner, name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir), patch("sentiment_tracker.INCREMENTAL_FETCH_LIMIT", 0):
+            fetcher = NoBulkFetcher()
+            self.assertFalse(hasattr(fetcher, "get_cross_sectional_state_history"))
+            data = SentimentTracker(fetcher=fetcher).fetch_all_data()
+
+            self.assertIsNotNone(data["cross_section"])
+            self.assertEqual(data["cross_section"]["date"], fetcher.dates[-1])
+
+    def test_incremental_history_matches_bulk_history(self):
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
+            fetcher = FakeHistoryFetcher()
+            tracker = SentimentTracker(fetcher=fetcher)
+            with patch("sentiment_tracker.INCREMENTAL_FETCH_LIMIT", 0):
+                bulk = tracker.fetch_all_data()
+            with patch("sentiment_tracker.INCREMENTAL_FETCH_LIMIT", 100):
+                incremental = SentimentTracker(fetcher=fetcher).fetch_all_data()
+
+            for key in ("breadth", "breadth_history", "cross_section", "cross_section_history"):
+                self.assertEqual(bulk[key], incremental[key])
 
     def test_save_result_propagates_write_failures(self):
         with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
