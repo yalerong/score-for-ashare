@@ -97,6 +97,9 @@ STYLE_INDEX_CODES = {
     "largecap": "000300",
 }
 
+# BSE margin trading launched on 2023-02-13: https://www.bse.cn/important_news/200015060.html
+BSE_MARGIN_START = "20230213"
+
 
 def _to_ts_index(symbol: str) -> str:
     if "." in symbol:
@@ -128,22 +131,31 @@ class DataFetcherTushare:
         logger.warning("offline_mode not supported on Tushare fetcher; ignoring.")
 
     def _get_trade_cal(self, years: int = 6) -> list[str]:
-        if self._trade_cal_cache:
-            return self._trade_cal_cache
         end = datetime.now()
         start = end - timedelta(days=years * 365 + 30)
+        start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+        cache: list[str] | None = getattr(self, "_trade_cal_cache", None)
+        if (
+            cache
+            and getattr(self, "_trade_cal_end", None) == end_s
+            and getattr(self, "_trade_cal_start", end_s) <= start_s
+        ):
+            return cache
         _shared_rate_limit()
         df = self.pro.trade_cal(
             exchange="SSE",
-            start_date=start.strftime("%Y%m%d"),
-            end_date=end.strftime("%Y%m%d"),
+            start_date=start_s,
+            end_date=end_s,
             is_open="1",
         )
         if df is None or df.empty:
             self._trade_cal_cache = []
             return []
-        self._trade_cal_cache = sorted(df["cal_date"].tolist())
-        return self._trade_cal_cache
+        cache = sorted(df["cal_date"].tolist())
+        self._trade_cal_cache = cache
+        self._trade_cal_start = start_s
+        self._trade_cal_end = end_s
+        return cache
 
     def _latest_trade_date(self) -> str:
         cal = self._get_trade_cal()
@@ -195,18 +207,23 @@ class DataFetcherTushare:
         ]
 
     def _get_spot(self, trade_date_yyyymmdd: str) -> Optional[pd.DataFrame]:
-        if trade_date_yyyymmdd in self._spot_cache:
+        is_current = trade_date_yyyymmdd >= datetime.now().strftime("%Y%m%d")
+        if not is_current and trade_date_yyyymmdd in self._spot_cache:
             cached = self._spot_cache[trade_date_yyyymmdd]
-            return cached if not cached.empty else None
+            if not cached.empty:
+                return cached
         _shared_rate_limit()
         df = self.pro.daily(trade_date=trade_date_yyyymmdd)
         if df is None or df.empty:
-            self._spot_cache[trade_date_yyyymmdd] = pd.DataFrame()
             return None
         df = df.copy()
         df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
         df = df[df["ts_code"].str.endswith((".SH", ".SZ"))]
-        self._spot_cache[trade_date_yyyymmdd] = df
+        if df.empty:
+            return None
+        # Today's daily snapshot may still be arriving; retry it on later runs.
+        if not is_current:
+            self._spot_cache[trade_date_yyyymmdd] = df
         return df
 
     def _breadth_from_spot(self, spot: pd.DataFrame, date_iso: str) -> dict:
@@ -414,6 +431,41 @@ class DataFetcherTushare:
             for row in df.itertuples(index=False)
         ]
 
+    def _margin_records(self, frame, years=6):
+        frame = frame.copy()
+        frame["rzye"] = pd.to_numeric(frame["rzye"], errors="coerce")
+        frame = frame.drop_duplicates(["trade_date", "exchange_id"], keep="last")
+        calendar = self._get_trade_cal(years=years)
+        previous_dates = dict(zip(calendar[1:], calendar[:-1]))
+        records = []
+        previous = None
+        for trade_date, daily in frame.groupby("trade_date", sort=True):
+            required = {"SSE", "SZSE"}
+            if trade_date >= BSE_MARGIN_START:
+                required.add("BSE")
+            markets = set(daily["exchange_id"])
+            if markets != required or daily["rzye"].isna().any():
+                previous = None
+                continue
+            balance = float(daily["rzye"].sum())
+            net_change = None
+            if (
+                previous is not None
+                and previous[0] == previous_dates.get(trade_date)
+                and previous[2] == markets
+            ):
+                net_change = balance - previous[1]
+            records.append({
+                "date": _iso(trade_date),
+                "margin_balance": balance,
+                "net_change": net_change,
+                "sse_balance": float(daily.loc[daily["exchange_id"] == "SSE", "rzye"].sum()),
+                "szse_balance": float(daily.loc[daily["exchange_id"] == "SZSE", "rzye"].sum()),
+                "source": "tushare",
+            })
+            previous = (trade_date, balance, markets)
+        return records
+
     def get_margin_trading(self):
         try:
             latest = self._latest_trade_date()
@@ -422,25 +474,8 @@ class DataFetcherTushare:
             df = self.pro.margin(start_date=window_start, end_date=latest)
             if df is None or df.empty:
                 return None
-            df["rzye"] = pd.to_numeric(df["rzye"], errors="coerce")
-            exch_counts = df.groupby("trade_date")["exchange_id"].nunique()
-            full_dates = sorted(exch_counts[exch_counts >= 2].index)
-            if len(full_dates) < 2:
-                return None
-            latest_date = full_dates[-1]
-            prev_date = full_dates[-2]
-            latest_bal = float(df[df["trade_date"] == latest_date]["rzye"].sum())
-            prev_bal = float(df[df["trade_date"] == prev_date]["rzye"].sum())
-            sse_bal = float(df[(df["trade_date"] == latest_date) & (df["exchange_id"] == "SSE")]["rzye"].sum())
-            szse_bal = float(df[(df["trade_date"] == latest_date) & (df["exchange_id"] == "SZSE")]["rzye"].sum())
-            return {
-                "margin_balance": latest_bal,
-                "net_change": latest_bal - prev_bal,
-                "sse_balance": sse_bal,
-                "szse_balance": szse_bal,
-                "date": _iso(latest_date),
-                "source": "tushare",
-            }
+            records = self._margin_records(df)
+            return records[-1] if records else None
         except Exception as exc:
             logger.error("Failed to fetch margin: %s", exc)
             return None
@@ -469,22 +504,7 @@ class DataFetcherTushare:
         if not rows:
             return []
         full = pd.concat(rows, ignore_index=True)
-        full["rzye"] = pd.to_numeric(full["rzye"], errors="coerce")
-        agg = full.groupby("trade_date")["rzye"].sum().sort_index()
-
-        results = []
-        prev_balance = None
-        for trade_date, balance in agg.items():
-            balance = float(balance)
-            net_change = balance - prev_balance if prev_balance is not None else 0.0
-            results.append({
-                "date": _iso(trade_date),
-                "margin_balance": balance,
-                "net_change": net_change,
-                "source": "tushare",
-            })
-            prev_balance = balance
-        return results
+        return self._margin_records(full, years=max(6, years + 1))
 
 
 DataFetcher = DataFetcherTushare

@@ -104,6 +104,8 @@ def _safe_rank_ic(signal: pd.Series, returns: pd.Series) -> float | None:
 
     signal_rank = aligned.iloc[:, 0].rank(method="average")
     return_rank = aligned.iloc[:, 1].rank(method="average")
+    if signal_rank.nunique() < 2 or return_rank.nunique() < 2:
+        return None
     corr = signal_rank.corr(return_rank)
     if pd.isna(corr):
         return None
@@ -115,8 +117,8 @@ def evaluate_signal_against_returns(
     signal_col: str,
     return_cols: Sequence[str],
     buckets: int = 5,
-) -> Dict[str, object]:
-    result: Dict[str, object] = {"rank_ic": {}, "bucket_summary": {}}
+) -> Dict[str, Dict[str, object]]:
+    result: Dict[str, Dict[str, object]] = {"rank_ic": {}, "bucket_summary": {}}
     signal = pd.to_numeric(frame[signal_col], errors="coerce")
 
     for return_col in return_cols:
@@ -124,12 +126,14 @@ def evaluate_signal_against_returns(
         result["rank_ic"][return_col] = _safe_rank_ic(signal, future_returns)
 
         sample = pd.DataFrame({"signal": signal, "future_return": future_returns}).dropna()
-        if len(sample) < buckets:
+        unique_scores = sample["signal"].nunique()
+        if len(sample) < buckets or unique_scores < 2:
             result["bucket_summary"][return_col] = []
             continue
 
-        ranked = sample["signal"].rank(method="first")
-        sample["bucket"] = pd.qcut(ranked, buckets, labels=False) + 1
+        sample["bucket"] = pd.qcut(
+            sample["signal"], min(buckets, unique_scores), labels=False, duplicates="drop"
+        ) + 1
         grouped = sample.groupby("bucket")["future_return"].agg(["mean", "median", "count"])
         grouped = grouped.reset_index()
         result["bucket_summary"][return_col] = grouped.to_dict("records")

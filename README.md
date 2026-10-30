@@ -4,17 +4,22 @@ A股市场情绪量化追踪系统，输出 0-100 连续分数作为风险偏好
 
 ## 核心设计
 
-情绪总分由 7 个维度加权合成，缺失组件自动降权，不使用随机值补满。
+当前模型版本为 `2.0-directional-volume`。情绪总分由 6 个维度加权合成，缺失组件自动降权，不使用随机值补满。以下是基础相对权重（合计 0.85），计算时按实际可用组件归一化。
 
 | 维度 | 权重 | 数据源 | 说明 |
 |------|------|--------|------|
 | market_breadth | 0.25 | tushare `pro.daily` 全市场 | 全市场涨跌广度、涨停跌停数 |
 | cross_section | 0.15 | tushare `pro.daily` (spot 阈值) | 涨停生态、强势池、风格差 |
-| volume_change | 0.15 | tushare `pro.index_daily` | 成交额相对历史中位水平 |
+| volume_change | 0.15 | tushare `pro.index_daily` | 量价确认：上涨放量加分，下跌放量减分 |
 | volatility | 0.15 | tushare `pro.index_daily` | 20日实现波动率（反向） |
-| north_flow | 0.15 | tushare `pro.moneyflow_hsgt` | 北向资金相对成交额强弱 |
 | margin_trading | 0.10 | tushare `pro.margin` (SSE+SZSE+BSE) | 两融净变化相对余额强弱 |
 | trend | 0.05 | tushare `pro.index_daily` | 涨跌幅、20日动量、均线偏离 |
+
+量价确认强度为 `abs(当日涨跌幅) × (成交额 / 20日成交额中位数)`，在目标日最近365个自然日的有效非零强度中计算百分位 `P`，量价分为 `50 + sign(涨跌幅) × P / 2`。平盘固定50；有效非零历史不足5条时中性处理。相同历史下，涨时放量不降分、跌时放量不升分；经验百分位有台阶，不保证每次总分都随指数同向变动。
+
+`north_money` 的现行定义无法核验为日度净流入，已退出总分，输出字段保留为不可用，显示“不参与评分”。六项齐全时，归一化权重约为广度29.41%、横截面/量价/波动各17.65%、两融11.76%、趋势5.88%。
+
+结果记录 `model_version`、`component_weights` 与 `effective_weights`。历史评估拒绝混用不同版本或手动/自动口径；使用新公式时须按同一版本重算研究区间，不能直接拼接旧分数。下方等级分界沿用原定义，尚未校准成上涨概率或反转阈值。
 
 ## 结果解释
 
@@ -41,8 +46,10 @@ A股市场情绪量化追踪系统，输出 0-100 连续分数作为风险偏好
 
 实时与回测使用相同口径（per-stock 全市场 snapshot），不存在"实时维度 ≠ 历史维度"的不对齐问题。
 
+实时和历史评分均使用截至目标交易日、包含当日的最近 365 个自然日作为校准窗口，指数指标额外加载预热数据。回填会同步保存横截面历史；结果写入失败时会抛出异常，阻止日报继续发送。
+
 - 历史回填走 `pro.daily(trade_date=...)` 逐日抓取，~3 年约 4 分钟（受默认限速 200/min）
-- 手动录入模式已接入评分引擎，产出与主流程可比分数
+- 手动录入也按涨跌方向处理成交，但使用绝对值映射，版本标记为 `2.0-directional-volume-manual`，不与自动百分位分直接比较
 
 ## 取数口径校验
 
@@ -67,6 +74,14 @@ python run_today.py
 ```bash
 python -c "from sentiment_tracker import SentimentTracker; SentimentTracker().backfill_history(days=1100)"
 ```
+
+只重算指定日期范围（包含起止日，跳过非交易日）：
+
+```bash
+python -c "from sentiment_tracker import SentimentTracker; SentimentTracker().backfill_history(start_date='2026-09-01', end_date='2026-10-30')"
+```
+
+`days` 表示截至 `end_date`（默认今天）的自然日数量，仅更新请求范围内的评分。尚未发布日线的交易日不会生成分数；结果中的 `component_availability` 标明各分项是否可用，缺失分项不参与加权。
 
 历史有效性评估：
 
@@ -155,6 +170,6 @@ python setup_email_scheduler.py
 
 ## 已知边界
 
-- 北向资金沪深港通日度数据 2024-08 起官方口径变化（看起来已从净流入变为 gross turnover）；保留 tushare 原始值参与百分位评分，相对排名仍有意义
+- 北向披露自2024-08调整，Tushare原始字段构造尚无法由现行说明核验；当前版本排除该代理项，不将其当作日度净流入
 - 涨停判定使用 spot `pct_chg >= 9.5%` 阈值近似，对创业板/科创板 20% 涨停存在低估（约 2-5% 误差）
 - 分数映射混用百分位与有界线性，详见各模块方法文档

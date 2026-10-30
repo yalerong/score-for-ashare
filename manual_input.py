@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 手动输入今日数据，用于网络受限时获取真实情绪指标。
-分数通过 SentimentScorer.bounded_linear_score 计算，与主流程使用相同的权重和等级定义。
-注意：手动分数基于绝对值映射（非历史百分位），与自动分数尺度不完全可比，保存时会标记 source='manual_input'。
+分数通过绝对值映射计算，成交项结合指数涨跌方向，与主流程使用相同的权重和等级定义。
+注意：手动分数没有自动模式的历史校准，尺度不完全可比，保存时以独立的manual模型版本标记。
 """
 
 import os
 from datetime import datetime
 
-from config import DATA_DIR, SENTIMENT_LEVELS, SENTIMENT_WEIGHTS
+from config import DATA_DIR, MODEL_VERSION, SENTIMENT_LEVELS, SENTIMENT_WEIGHTS
 from sentiment_scoring import SentimentScorer
 
 
@@ -54,9 +54,6 @@ def main():
     limit_up = get_int_input("涨停家数: ")
     limit_down = get_int_input("跌停家数: ")
 
-    print("\n--- 北向资金（沪深港通）---")
-    north_flow = get_float_input("今日净流入（亿元，负数表示流出）: ")
-
     print("\n--- 融资融券（可选，直接回车跳过）---")
     margin_change_input = input("融资余额变化（亿元，负数表示减少）: ").strip()
     has_margin = margin_change_input != ""
@@ -73,15 +70,14 @@ def main():
     up_ratio = up_count / total_stocks * 100
     breadth_score = scorer.bounded_linear_score(up_ratio, lower=10, upper=90, bullish=True)
 
-    # volume_change: 成交额, 3000亿-20000亿 映射到 0-100
-    volume_score = scorer.bounded_linear_score(volume, lower=3000, upper=20000, bullish=True)
+    # 手动量价确认：保留绝对成交额映射，按涨跌方向对称分配到50分两侧。
+    activity_score = scorer.bounded_linear_score(volume, lower=3000, upper=20000, bullish=True)
+    direction = 1 if index_change > 0 else -1 if index_change < 0 else 0
+    volume_score = 50.0 + direction * activity_score / 2
 
     # volatility: 日振幅近似, 0%-40% 映射, bearish (越高分数越低)
     volatility = abs(index_change) * 2
     volatility_score = scorer.bounded_linear_score(volatility, lower=0, upper=40, bullish=False)
-
-    # north_flow: 净流入 -100亿到+200亿, bullish
-    north_score = scorer.bounded_linear_score(north_flow, lower=-100, upper=200, bullish=True)
 
     # margin_trading: 余额变化 -100亿到+100亿, bullish
     margin_score = scorer.bounded_linear_score(margin_change, lower=-100, upper=100, bullish=True)
@@ -95,7 +91,7 @@ def main():
         "cross_section": {"score": None, "available": False},
         "volume_change": {"score": volume_score, "available": True},
         "volatility": {"score": volatility_score, "available": True},
-        "north_flow": {"score": north_score, "available": True},
+        "north_flow": {"score": None, "available": False},
         "margin_trading": {"score": margin_score, "available": has_margin},
         "trend": {"score": trend_score, "available": True},
     }
@@ -118,9 +114,8 @@ def main():
     print(f"\n[分项指标]")
     labels = {
         "market_breadth": ("市场涨跌广度", up_ratio),
-        "volume_change": ("成交量活跃度", volume),
+        "volume_change": ("量价确认", volume),
         "volatility": ("波动率", volatility),
-        "north_flow": ("北向资金", north_flow),
         "margin_trading": ("融资融券", margin_change),
         "trend": ("指数涨跌", index_change),
     }
@@ -128,7 +123,6 @@ def main():
         "market_breadth": "%",
         "volume_change": "亿",
         "volatility": "%",
-        "north_flow": "亿",
         "trend": "%",
         "margin_trading": "亿",
     }
@@ -147,18 +141,21 @@ def main():
         date_str = datetime.now().strftime("%Y-%m-%d")
 
         result = {
+            "model_version": MODEL_VERSION + "-manual",
             "timestamp": date_str + " 15:00:00",
             "date": date_str,
             "sentiment_score": total_score,
             "sentiment_level": level,
             "coverage": coverage,
             "available_components": composite["available_components"],
+            "component_availability": {key: bool(item["available"]) for key, item in components.items()},
+            "component_weights": dict(SENTIMENT_WEIGHTS),
             "components": {
                 "market_breadth": round(breadth_score, 2),
                 "cross_section": 0,
                 "volume_change": round(volume_score, 2),
                 "volatility": round(volatility_score, 2),
-                "north_flow": round(north_score, 2),
+                "north_flow": None,
                 "margin_trading": round(margin_score, 2),
                 "index_change": round(trend_score, 2),
                 "trend": round(trend_score, 2),
@@ -171,10 +168,10 @@ def main():
                 "down_count": down_count,
                 "limit_up": limit_up,
                 "limit_down": limit_down,
-                "north_flow": north_flow * 1e8,
+                "north_flow": None,
                 "breadth_source": "manual_input",
                 "cross_section_source": "manual_input",
-                "north_source": "manual_input",
+                "north_source": "excluded_unverified_proxy",
                 "margin_source": "manual_input",
                 "trend_source": "manual_input",
             },

@@ -1,4 +1,7 @@
 import unittest
+from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import pandas as pd
 
@@ -48,6 +51,130 @@ class FakeTushareFetcher(DataFetcherTushare):
 
 
 class DataFetcherTushareTests(unittest.TestCase):
+    def setUp(self):
+        self.rate_limit = patch("data_fetcher_tushare._shared_rate_limit")
+        self.rate_limit.start()
+        self.addCleanup(self.rate_limit.stop)
+
+    def make_fetcher(self, **api_methods):
+        fetcher = DataFetcherTushare.__new__(DataFetcherTushare)
+        fetcher.pro = SimpleNamespace(**api_methods)
+        fetcher._spot_cache = {}
+        fetcher._trade_cal_cache = None
+        return fetcher
+
+    def test_empty_spot_is_retried(self):
+        daily = Mock(side_effect=[pd.DataFrame(), pd.DataFrame({
+            "ts_code": ["000001.SZ"], "pct_chg": [1.0],
+        })])
+        fetcher = self.make_fetcher(daily=daily)
+        self.assertIsNone(fetcher._get_spot("20260511"))
+        self.assertIsNotNone(fetcher._get_spot("20260511"))
+        self.assertEqual(daily.call_count, 2)
+
+    def test_current_spot_is_refreshed_after_partial_response(self):
+        today = datetime.now().strftime("%Y%m%d")
+        daily = Mock(side_effect=[
+            pd.DataFrame({"ts_code": ["000001.SZ"], "pct_chg": [1.0]}),
+            pd.DataFrame({"ts_code": ["000001.SZ", "600000.SH"], "pct_chg": [1.0, 2.0]}),
+        ])
+        fetcher = self.make_fetcher(daily=daily)
+        self.assertEqual(len(fetcher._get_spot(today)), 1)
+        self.assertEqual(len(fetcher._get_spot(today)), 2)
+
+    def test_calendar_refreshes_across_day_and_for_longer_range(self):
+        class Clock(datetime):
+            current = datetime(2026, 10, 29, 17)
+
+            @classmethod
+            def now(cls):
+                return cls.current
+
+        def calendar(**kwargs):
+            dates = ["20261029", "20261030"]
+            return pd.DataFrame({"cal_date": [d for d in dates if d <= kwargs["end_date"]]})
+
+        trade_cal = Mock(side_effect=calendar)
+        fetcher = self.make_fetcher(trade_cal=trade_cal)
+        with patch("data_fetcher_tushare.datetime", Clock):
+            self.assertEqual(fetcher._latest_trade_date(), "20261029")
+            self.assertEqual(fetcher._latest_trade_date(), "20261029")
+            self.assertEqual(trade_cal.call_count, 1)
+            Clock.current = datetime(2026, 10, 30, 17)
+            self.assertEqual(fetcher._latest_trade_date(), "20261030")
+            fetcher._get_trade_cal(years=10)
+        self.assertEqual(trade_cal.call_count, 3)
+
+    def test_margin_requires_exchange_identity_in_live_and_history(self):
+        rows = []
+        for date, balances in [
+            ("20260511", {"SSE": 100, "SZSE": 100, "BSE": 1}),
+            ("20260512", {"SSE": 101, "SZSE": 100, "BSE": 1}),
+            ("20260513", {"SSE": 102, "BSE": 1}),
+        ]:
+            rows.extend({"trade_date": date, "exchange_id": exchange, "rzye": balance}
+                        for exchange, balance in balances.items())
+        fetcher = self.make_fetcher(margin=Mock(return_value=pd.DataFrame(rows)))
+        fetcher._get_trade_cal = lambda years=6: ["20260511", "20260512", "20260513"]
+        fetcher._latest_trade_date = lambda: "20260513"
+        current = fetcher.get_margin_trading()
+        historical = fetcher.get_margin_trading_historical(years=1)
+        self.assertEqual(current["date"], "2026-05-12")
+        self.assertEqual(current["net_change"], 1.0)
+        self.assertEqual([r["date"] for r in historical], ["2026-05-11", "2026-05-12"])
+        self.assertIsNone(historical[0]["net_change"])
+
+    def test_margin_does_not_bridge_incomplete_or_absent_trading_days(self):
+        rows = []
+        for date, markets in [
+            ("20260511", ["SSE", "SZSE", "BSE"]),
+            ("20260512", ["SSE", "SZSE"]),
+            ("20260513", ["SSE", "SZSE", "BSE"]),
+            ("20260515", ["SSE", "SZSE", "BSE"]),
+        ]:
+            rows.extend({"trade_date": date, "exchange_id": exchange, "rzye": 100}
+                        for exchange in markets)
+        fetcher = self.make_fetcher(margin=Mock(return_value=pd.DataFrame(rows)))
+        fetcher._get_trade_cal = lambda years=6: [f"202605{day}" for day in range(11, 16)]
+        history = fetcher.get_margin_trading_historical(years=1)
+        self.assertEqual([r["date"] for r in history], ["2026-05-11", "2026-05-13", "2026-05-15"])
+        self.assertTrue(all(r["net_change"] is None for r in history))
+
+    def test_margin_accepts_history_before_bse_margin_launch(self):
+        rows = [{"trade_date": date, "exchange_id": exchange, "rzye": balance}
+                for date, balance in [("20230209", 100), ("20230210", 101)]
+                for exchange in ["SSE", "SZSE"]]
+        rows.extend({"trade_date": "20230213", "exchange_id": exchange, "rzye": 102}
+                    for exchange in ["SSE", "SZSE", "BSE"])
+        fetcher = self.make_fetcher(margin=Mock(return_value=pd.DataFrame(rows)))
+        fetcher._get_trade_cal = lambda years=6: ["20230209", "20230210", "20230213"]
+        history = fetcher.get_margin_trading_historical(years=1)
+        self.assertEqual(len(history), 3)
+        self.assertEqual(history[1]["net_change"], 2.0)
+        self.assertIsNone(history[2]["net_change"])
+
+    def test_margin_rejects_modern_period_without_bse(self):
+        rows = [{"trade_date": date, "exchange_id": exchange, "rzye": 100}
+                for date in ["20260511", "20260512"]
+                for exchange in ["SSE", "SZSE"]]
+        fetcher = self.make_fetcher(margin=Mock(return_value=pd.DataFrame(rows)))
+        fetcher._get_trade_cal = lambda years=6: ["20260511", "20260512"]
+        fetcher._latest_trade_date = lambda: "20260512"
+        self.assertIsNone(fetcher.get_margin_trading())
+        self.assertEqual(fetcher.get_margin_trading_historical(years=1), [])
+
+    def test_margin_rejects_missing_bse_before_first_complete_modern_date(self):
+        rows = [{"trade_date": date, "exchange_id": exchange, "rzye": 100}
+                for date in ["20260511", "20260512"]
+                for exchange in ["SSE", "SZSE"]]
+        rows.extend({"trade_date": "20260513", "exchange_id": exchange, "rzye": 101}
+                    for exchange in ["SSE", "SZSE", "BSE"])
+        fetcher = self.make_fetcher(margin=Mock(return_value=pd.DataFrame(rows)))
+        fetcher._get_trade_cal = lambda years=6: ["20260511", "20260512", "20260513"]
+        history = fetcher.get_margin_trading_historical(years=1)
+        self.assertEqual([r["date"] for r in history], ["2026-05-13"])
+        self.assertIsNone(history[0]["net_change"])
+
     def test_cross_section_history_reuses_daily_spot_snapshots(self):
         history = FakeTushareFetcher().get_cross_sectional_state_history(years=1)
 

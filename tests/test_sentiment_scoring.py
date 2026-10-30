@@ -88,6 +88,30 @@ class SignalEvaluationTests(unittest.TestCase):
         self.assertGreater(report["rank_ic"]["forward_return_3d"], 0.9)
         self.assertEqual(len(report["bucket_summary"]["forward_return_3d"]), 4)
 
+    def test_constant_signal_has_no_return_buckets(self):
+        frame = pd.DataFrame(
+            {"sentiment_score": [50.0] * 10, "forward_return_3d": [i / 100 for i in range(-5, 5)]}
+        )
+
+        report = evaluate_signal_against_returns(frame, "sentiment_score", ["forward_return_3d"])
+
+        self.assertIsNone(report["rank_ic"]["forward_return_3d"])
+        self.assertEqual(report["bucket_summary"]["forward_return_3d"], [])
+
+    def test_tied_signal_buckets_do_not_depend_on_row_order(self):
+        frame = pd.DataFrame(
+            {"sentiment_score": [20.0] * 8 + [80.0] * 2, "forward_return_3d": [i / 100 for i in range(10)]}
+        )
+
+        forward = evaluate_signal_against_returns(frame, "sentiment_score", ["forward_return_3d"])
+        reversed_rows = evaluate_signal_against_returns(
+            frame.iloc[::-1], "sentiment_score", ["forward_return_3d"]
+        )
+
+        summary = forward["bucket_summary"]["forward_return_3d"]
+        self.assertLessEqual(len(summary), frame["sentiment_score"].nunique())
+        self.assertEqual(summary, reversed_rows["bucket_summary"]["forward_return_3d"])
+
 
 class CrossSectionStateTests(unittest.TestCase):
     def test_summarize_cross_section_state_combines_limit_and_style_data(self):

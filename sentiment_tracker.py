@@ -24,7 +24,7 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
-from config import DATA_DIR, LOG_CONFIG, SENTIMENT_LEVELS, SENTIMENT_WEIGHTS
+from config import DATA_DIR, LOG_CONFIG, MODEL_VERSION, SENTIMENT_LEVELS, SENTIMENT_WEIGHTS
 from data_fetcher_tushare import DataFetcherTushare as DataFetcher
 from sentiment_scoring import SentimentScorer
 
@@ -62,6 +62,7 @@ class SentimentTracker:
             os.replace(tmp_path, self.data_file)
         except Exception as exc:
             logger.error("Failed to save sentiment history: %s", exc)
+            raise
 
     def _load_cross_section_history(self):
         if os.path.exists(self.cross_section_file):
@@ -75,24 +76,21 @@ class SentimentTracker:
     def _save_cross_section(self, cross_section_data):
         if not cross_section_data:
             return
-        history = self._load_cross_section_history()
-        date_str = cross_section_data.get("date")
-        if not date_str:
+        self._save_cross_section_history([cross_section_data])
+
+    def _save_cross_section_history(self, rows):
+        if not rows:
             return
-        for idx, item in enumerate(history):
-            if item.get("date") == date_str:
-                history[idx] = cross_section_data
-                break
-        else:
-            history.append(cross_section_data)
-        history.sort(key=lambda item: item.get("date", ""))
+        history = {item["date"]: item for item in self._load_cross_section_history() if item.get("date")}
+        history.update({item["date"]: item for item in rows if item.get("date")})
         try:
             tmp_path = f"{self.cross_section_file}.tmp"
             with open(tmp_path, "w", encoding="utf-8") as handle:
-                json.dump(history, handle, ensure_ascii=False, indent=2)
+                json.dump([history[date] for date in sorted(history)], handle, ensure_ascii=False, indent=2)
             os.replace(tmp_path, self.cross_section_file)
         except Exception as exc:
             logger.error("Failed to save cross_section history: %s", exc)
+            raise
 
     def _normalize_weight_keys(self):
         weights = dict(SENTIMENT_WEIGHTS)
@@ -218,9 +216,32 @@ class SentimentTracker:
         return {"score": score, "available": bool(scores), "source": state_data.get("source", "unknown")}
 
     def _score_volume(self, row, history_frame):
-        amount_ratio = row.get("amount_ratio")
-        score = self.scorer.percentile_score(amount_ratio, history_frame["amount_ratio"], bullish=True)
-        return {"score": score, "available": pd.notna(amount_ratio), "value": amount_ratio}
+        """Confirm price direction with return magnitude and relative turnover."""
+        try:
+            amount_ratio = float(row.get("amount_ratio"))
+            change = float(row.get("change_pct"))
+        except (TypeError, ValueError):
+            return {"score": 50.0, "available": False, "value": None}
+        pressure = change * amount_ratio
+        if not np.isfinite(change) or not np.isfinite(amount_ratio) or amount_ratio <= 0 or not np.isfinite(pressure):
+            return {"score": 50.0, "available": False, "value": None}
+
+        result = {"score": 50.0, "available": True, "value": pressure}
+        if change == 0 or not {"change_pct", "amount_ratio"}.issubset(history_frame.columns):
+            return result
+
+        historical_change = pd.to_numeric(history_frame["change_pct"], errors="coerce")
+        historical_ratio = pd.to_numeric(history_frame["amount_ratio"], errors="coerce")
+        valid = np.isfinite(historical_change) & np.isfinite(historical_ratio) & (historical_ratio > 0)
+        with np.errstate(over="ignore", invalid="ignore"):
+            magnitudes = historical_change[valid].abs() * historical_ratio[valid]
+        magnitudes = magnitudes[np.isfinite(magnitudes) & (magnitudes > 0)]
+        if len(magnitudes) < self.scorer.min_history:
+            return result
+
+        strength = self.scorer.percentile_score(abs(pressure), magnitudes, bullish=True)
+        result["score"] = float(50.0 + np.sign(change) * strength / 2.0)
+        return result
 
     def _score_volatility(self, row, history_frame):
         realized_vol = row.get("volatility_20d")
@@ -228,6 +249,8 @@ class SentimentTracker:
         return {"score": score, "available": pd.notna(realized_vol), "value": realized_vol}
 
     def _score_north_flow(self, north_data, history_frame, row, north_lookup=None):
+        if "north_flow" not in self._normalize_weight_keys():
+            return {"score": 50.0, "available": False, "source": "excluded_unverified_proxy"}
         if not north_data or north_data.get("net_flow") is None:
             return {"score": 50.0, "available": False, "source": "missing"}
 
@@ -316,38 +339,63 @@ class SentimentTracker:
         margin_lookup=None,
         north_lookup=None,
     ):
+        # Use the same trailing 365 calendar days, including the target day,
+        # for daily runs and every historical score. Features are warmed up
+        # before clipping; future observations never enter calibration.
+        window_start = (pd.Timestamp(date_str) - pd.Timedelta(days=365)).strftime("%Y-%m-%d")
         history_frame = history_frame if history_frame is not None else pd.DataFrame()
-        breadth_history = breadth_history or []
-        cross_section_history = cross_section_history or []
-        margin_lookup = margin_lookup or {}
+        if not history_frame.empty:
+            history_frame = history_frame[
+                (history_frame["date"] > window_start) & (history_frame["date"] <= date_str)
+            ]
+        breadth_history = [item for item in breadth_history or [] if window_start < item["date"] <= date_str]
+        cross_section_history = {
+            item["date"]: item for item in cross_section_history or []
+            if window_start < item["date"] <= date_str
+        }
+        if cross_section_data and cross_section_data.get("date") == date_str:
+            cross_section_history[date_str] = cross_section_data
+        cross_section_history = list(cross_section_history.values())
+        margin_lookup = {date: item for date, item in (margin_lookup or {}).items() if window_start < date <= date_str}
+        north_lookup = {date: item for date, item in (north_lookup or {}).items() if window_start < date <= date_str}
+        north_date = (north_flow or {}).get("date") or str((north_flow or {}).get("timestamp") or "")[:10] or None
+        margin_date = (margin_data or {}).get("date") or None
 
         components = {
             "market_breadth": self._score_breadth(breadth_data, breadth_history),
             "cross_section": self._score_cross_section(cross_section_data, cross_section_history),
             "volume_change": self._score_volume(index_row, history_frame),
             "volatility": self._score_volatility(index_row, history_frame),
-            "north_flow": self._score_north_flow(north_flow, history_frame, index_row, north_lookup),
-            "margin_trading": self._score_margin(margin_data, margin_lookup),
+            "north_flow": self._score_north_flow(north_flow if north_date in (None, date_str) else None, history_frame, index_row, north_lookup),
+            "margin_trading": self._score_margin(margin_data if margin_date in (None, date_str) else None, margin_lookup),
             "trend": self._score_trend(index_row, history_frame),
         }
 
         weights = self._normalize_weight_keys()
         composite = self.scorer.combine_component_scores(components, weights)
         sentiment_score = round(composite["score"], 2)
+        active_weight = sum(weight for name, weight in weights.items() if components[name]["available"])
 
         return {
+            "model_version": MODEL_VERSION,
+            "component_weights": weights,
+            "effective_weights": {
+                name: weight / active_weight if active_weight and components[name]["available"] else 0.0
+                for name, weight in weights.items()
+            },
             "timestamp": f"{date_str} 15:00:00",
             "date": date_str,
             "sentiment_score": sentiment_score,
             "sentiment_level": self.get_sentiment_level(sentiment_score),
             "coverage": round(composite["coverage"], 4),
             "available_components": composite["available_components"],
+            "component_availability": {name: bool(item["available"]) for name, item in components.items()},
             "components": {
                 "market_breadth": round(components["market_breadth"]["score"], 2),
                 "cross_section": round(components["cross_section"]["score"], 2),
                 "volume_change": round(components["volume_change"]["score"], 2),
                 "volatility": round(components["volatility"]["score"], 2),
-                "north_flow": round(components["north_flow"]["score"], 2),
+                "north_flow": round(components["north_flow"]["score"], 2) if components["north_flow"]["available"] else None,
                 "margin_trading": round(components["margin_trading"]["score"], 2),
                 "index_change": round(components["trend"]["score"], 2),
                 "trend": round(components["trend"]["score"], 2),
@@ -362,6 +410,8 @@ class SentimentTracker:
                 "cross_section_source": components["cross_section"].get("source", "unknown"),
                 "north_source": components["north_flow"].get("source", "unknown"),
                 "margin_source": components["margin_trading"].get("source", "unknown"),
+                "north_date": north_date or (date_str if north_flow else None),
+                "margin_date": margin_date or (date_str if margin_data else None),
             },
         }
 
@@ -372,13 +422,22 @@ class SentimentTracker:
                 return level
         return "中性"
 
-    def backfill_history(self, days=1100, symbol="000001"):
+    def backfill_history(self, days=1100, symbol="000001", start_date=None, end_date=None):
         fetcher = self._get_fetcher()
         if fetcher.offline_mode:
             raise RuntimeError(
                 "Backfill is disabled in offline/mock mode to prevent data contamination."
             )
-        years = max(1, math.ceil(days / 365))
+        end = pd.Timestamp(end_date or datetime.now()).normalize()
+        if start_date is None and days <= 0:
+            raise ValueError("days must be positive")
+        start = pd.Timestamp(start_date).normalize() if start_date is not None else end - pd.Timedelta(days=days - 1)
+        if start > end:
+            raise ValueError("start_date must not be after end_date")
+        # Fetch calibration history and an additional feature warm-up interval.
+        lookback_days = (pd.Timestamp(datetime.now()).normalize() - start).days + 365 + 90
+        years = max(2, math.ceil(lookback_days / 365))
+        start_str, end_str = start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
         index_df = fetcher.get_index_data_range(symbol, years=years)
         if index_df is None or index_df.empty:
             raise RuntimeError("Unable to fetch index history for backfill.")
@@ -398,8 +457,10 @@ class SentimentTracker:
 
         results = []
         for idx, row in index_df.iterrows():
-            history_slice = index_df.iloc[: idx + 1].copy()
             date_str = row["date"]
+            if not start_str <= date_str <= end_str:
+                continue
+            history_slice = index_df.iloc[: idx + 1]
             result = self.calculate_sentiment_for_date(
                 date_str=date_str,
                 index_row=row,
@@ -420,27 +481,34 @@ class SentimentTracker:
             existing[result["date"]] = result
         self.history = [existing[key] for key in sorted(existing)]
         self.save_history()
+        self._save_cross_section_history(cross_section_history)
         return results
 
     def fetch_all_data(self):
         fetcher = self._get_fetcher()
-        index_df = fetcher.get_index_data_range("000001", years=1)
+        index_df = fetcher.get_index_data_range("000001", years=2)
         if index_df is not None and not index_df.empty:
             index_df = self._prepare_index_features(index_df)
             latest_trade_date = index_df.iloc[-1]["date"]
         else:
             latest_trade_date = datetime.now().strftime("%Y-%m-%d")
 
+        cross_section = fetcher.get_cross_sectional_state(date=latest_trade_date)
+        if hasattr(fetcher, "get_cross_sectional_state_history"):
+            cross_section_history = fetcher.get_cross_sectional_state_history(years=2)
+        else:
+            cross_section_history = self._load_cross_section_history()
+
         return {
             "breadth": fetcher.get_market_breadth(date=latest_trade_date),
-            "breadth_history": fetcher.get_market_breadth_history(years=1),
-            "cross_section": fetcher.get_cross_sectional_state(date=latest_trade_date),
-            "cross_section_history": self._load_cross_section_history(),
+            "breadth_history": fetcher.get_market_breadth_history(years=2),
+            "cross_section": cross_section,
+            "cross_section_history": cross_section_history,
             "index_data": index_df,
             "north": fetcher.get_north_flow(),
-            "north_history": fetcher.get_north_flow_historical(years=1),
+            "north_history": fetcher.get_north_flow_historical(years=2),
             "margin": fetcher.get_margin_trading(),
-            "margin_history": fetcher.get_margin_trading_historical(years=1),
+            "margin_history": fetcher.get_margin_trading_historical(years=2),
         }
 
     def calculate_sentiment(self):
@@ -461,16 +529,11 @@ class SentimentTracker:
         if not MATPLOTLIB_AVAILABLE:
             return None
 
-        labels = ["广度", "横截面", "成交", "波动", "北向", "两融", "趋势"]
-        values = [
-            result["components"]["market_breadth"],
-            result["components"].get("cross_section", 50.0),
-            result["components"]["volume_change"],
-            result["components"]["volatility"],
-            result["components"]["north_flow"],
-            result["components"]["margin_trading"],
-            result["components"]["trend"],
-        ]
+        component_labels = {"market_breadth": "广度", "cross_section": "横截面", "volume_change": "量价", "volatility": "波动", "margin_trading": "两融", "trend": "趋势"}
+        availability = result.get("component_availability", {})
+        active = [name for name in self._normalize_weight_keys() if availability.get(name, result["components"].get(name) is not None)]
+        labels = [component_labels[name] for name in active]
+        values = [result["components"][name] for name in active]
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.bar(labels, values, color="#2b6cb0")
@@ -523,6 +586,7 @@ class SentimentTracker:
             )
         else:
             self.save_result(result)
+            self._save_cross_section_history(components["cross_section_history"])
             self._save_cross_section(components["cross_section"])
         return result
 

@@ -96,6 +96,8 @@ def get_data_source_badge(source):
         return "模拟"
     if source in {"manual_input"}:
         return "手动录入"
+    if source == "excluded_unverified_proxy":
+        return "不参与评分"
     if source in {"estimate", "estimated"}:
         return "估算"
     if not source:
@@ -118,7 +120,7 @@ def _component_rows(data):
     rows = [
         ("市场广度", components.get("market_breadth"), raw_data.get("breadth_source")),
         ("横截面情绪", components.get("cross_section"), raw_data.get("cross_section_source")),
-        ("成交活跃度", components.get("volume_change"), raw_data.get("volume_source", "derived")),
+        ("量价确认", components.get("volume_change"), raw_data.get("volume_source", "derived")),
         ("波动率", components.get("volatility"), raw_data.get("volatility_source", "derived")),
         ("北向资金", components.get("north_flow"), raw_data.get("north_source")),
         ("两融变化", components.get("margin_trading"), raw_data.get("margin_source")),

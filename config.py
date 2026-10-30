@@ -26,12 +26,15 @@ DATA_SOURCES = {
     }
 }
 
+MODEL_VERSION = "2.0-directional-volume"
+
+# Keep the six verified components' relative weights; normalize when combining.
+# north_money has an unverified post-2024 definition and is excluded.
 SENTIMENT_WEIGHTS = {
     "market_breadth": 0.25,
     "cross_section": 0.15,
     "volume_change": 0.15,
     "volatility": 0.15,
-    "north_flow": 0.15,
     "margin_trading": 0.10,
     "trend": 0.05,
 }

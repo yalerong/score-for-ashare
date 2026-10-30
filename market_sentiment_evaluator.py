@@ -22,6 +22,9 @@ def load_sentiment_history(path: Path) -> pd.DataFrame:
     frame = pd.DataFrame(data)
     if frame.empty:
         return frame
+    versions = frame.get("model_version", pd.Series("legacy", index=frame.index)).fillna("legacy")
+    if versions.nunique() > 1:
+        raise ValueError("Mixed model versions in sentiment history; recompute one model version before evaluation.")
     frame["date"] = pd.to_datetime(frame["date"]).dt.strftime("%Y-%m-%d")
     frame["sentiment_score"] = pd.to_numeric(frame["sentiment_score"], errors="coerce")
     return frame.sort_values("date").reset_index(drop=True)
