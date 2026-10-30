@@ -105,10 +105,13 @@ class SentimentTracker:
     def _save_cross_section_history(self, rows):
         self._save_daily_rows(self.cross_section_file, rows)
 
-    def _incremental_daily_rows(self, path, needed_dates, fetch_one, fetch_bulk):
-        """Reuse persisted completed days; fetch only missing or still-current dates."""
+    def _incremental_daily_rows(self, path, needed_dates, fetch_one, fetch_bulk, is_complete=lambda row: True):
+        """Reuse persisted completed days; fetch missing, incomplete or still-current dates."""
         today = datetime.now().strftime("%Y-%m-%d")
-        cached = {item["date"]: item for item in self._load_daily_rows(path) if item.get("date") in needed_dates}
+        cached = {
+            item["date"]: item for item in self._load_daily_rows(path)
+            if item.get("date") in needed_dates and is_complete(item)
+        }
         missing = [date for date in needed_dates if date not in cached or date >= today]
         if len(missing) > INCREMENTAL_FETCH_LIMIT:
             return fetch_bulk()
@@ -551,7 +554,14 @@ class SentimentTracker:
             needed_dates,
             lambda date: fetcher.get_cross_sectional_state(date=date),
             fetch_cross_section_bulk,
+            # A failed style-index request leaves these empty; retry such rows on later runs.
+            lambda row: row.get("microcap_change") is not None and row.get("largecap_change") is not None,
         )
+        if not any(item["date"] == latest_trade_date for item in cross_section_history):
+            # The cache-only fallback has no current row; fetch it directly.
+            current = fetcher.get_cross_sectional_state(date=latest_trade_date)
+            if current:
+                cross_section_history = sorted(cross_section_history + [current], key=lambda item: item["date"])
 
         return {
             "breadth": next((item for item in breadth_history if item["date"] == latest_trade_date), None),
