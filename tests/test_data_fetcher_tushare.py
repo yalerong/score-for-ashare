@@ -186,5 +186,18 @@ class DataFetcherTushareTests(unittest.TestCase):
         self.assertAlmostEqual(history[2]["style_spread"], 0.6)
 
 
+    def test_full_size_daily_reply_is_rejected_as_truncated(self):
+        rows = pd.DataFrame({"ts_code": ["000001.SZ"] * 6000, "pct_chg": [1.0] * 6000})
+        fetcher = self.make_fetcher(daily=Mock(return_value=rows))
+        with self.assertRaises(RuntimeError):
+            fetcher._get_spot("20260511")
+
+    def test_history_calendar_covers_requested_years(self):
+        trade_cal = Mock(return_value=pd.DataFrame({"cal_date": ["20260511"]}))
+        fetcher = self.make_fetcher(trade_cal=trade_cal, daily=Mock(return_value=pd.DataFrame()))
+        fetcher.get_market_breadth_history(years=8)
+        start = datetime.strptime(trade_cal.call_args.kwargs["start_date"], "%Y%m%d")
+        self.assertLessEqual(start, datetime.now() - pd.Timedelta(days=8 * 365))
+
 if __name__ == "__main__":
     unittest.main()

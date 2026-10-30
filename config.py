@@ -26,7 +26,7 @@ DATA_SOURCES = {
     }
 }
 
-MODEL_VERSION = "2.0-directional-volume"
+MODEL_VERSION = "2.1-lagged-margin"
 
 # Keep the six verified components' relative weights; normalize when combining.
 # north_money has an unverified post-2024 definition and is excluded.
