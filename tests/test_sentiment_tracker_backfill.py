@@ -376,6 +376,25 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
             self.assertIsNotNone(data["cross_section"])
             self.assertEqual(data["cross_section"]["date"], fetcher.dates[-1])
 
+    def test_cache_fallback_ignores_non_trading_day_rows(self):
+        class NoBulkFetcher:
+            offline_mode = False
+
+            def __init__(self):
+                self.inner = FakeHistoryFetcher()
+
+            def __getattr__(self, name):
+                if name == "get_cross_sectional_state_history":
+                    raise AttributeError(name)
+                return getattr(self.inner, name)
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir), patch("sentiment_tracker.INCREMENTAL_FETCH_LIMIT", 0):
+            tracker = SentimentTracker(fetcher=NoBulkFetcher())
+            tracker._save_cross_section_history([{"date": "2026-04-30", "up_ratio": 99.0, "source": "legacy"}])
+            data = tracker.fetch_all_data()
+
+            self.assertNotIn("2026-04-30", [item["date"] for item in data["cross_section_history"]])
+
     def test_incremental_history_matches_bulk_history(self):
         with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
             fetcher = FakeHistoryFetcher()
