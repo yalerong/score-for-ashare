@@ -47,6 +47,16 @@ def run_daily_report():
         print(f"[FAIL] 情绪计算失败: {exc}")
         return False
 
+    today_iso = datetime.now().strftime("%Y-%m-%d")
+    if result.get("date") != today_iso:
+        print(f"[FAIL] 结果日期 {result.get('date')} 不是今天 {today_iso}（当日指数日线可能未发布），不发送")
+        return False
+    availability = result.get("component_availability", {})
+    missing = [name for name in ("market_breadth", "cross_section") if not availability.get(name)]
+    if missing:
+        print(f"[FAIL] 当日个股快照缺失（{', '.join(missing)} 不可用），不发送")
+        return False
+
     sent = False
 
     try:

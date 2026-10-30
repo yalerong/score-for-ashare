@@ -100,6 +100,9 @@ STYLE_INDEX_CODES = {
 # BSE margin trading launched on 2023-02-13: https://www.bse.cn/important_news/200015060.html
 BSE_MARGIN_START = "20230213"
 
+# pro.daily returns at most 6000 rows per call; a full-size reply may be truncated.
+_DAILY_ROW_LIMIT = 6000
+
 
 def _to_ts_index(symbol: str) -> str:
     if "." in symbol:
@@ -216,6 +219,11 @@ class DataFetcherTushare:
         df = self.pro.daily(trade_date=trade_date_yyyymmdd)
         if df is None or df.empty:
             return None
+        if len(df) >= _DAILY_ROW_LIMIT:
+            raise RuntimeError(
+                f"pro.daily({trade_date_yyyymmdd}) returned {len(df)} rows, at the per-call limit; "
+                "the snapshot may be truncated and needs pagination."
+            )
         df = df.copy()
         df["pct_chg"] = pd.to_numeric(df["pct_chg"], errors="coerce")
         df = df[df["ts_code"].str.endswith((".SH", ".SZ"))]
@@ -257,7 +265,7 @@ class DataFetcherTushare:
     def get_market_breadth_history(self, years: int = 3):
         end = datetime.now()
         start = end - timedelta(days=years * 365)
-        cal = self._get_trade_cal()
+        cal = self._get_trade_cal(years=max(6, years))
         start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
         dates = [d for d in cal if start_s <= d <= end_s]
         logger.info("Fetching breadth history for %d trade dates", len(dates))
@@ -357,7 +365,7 @@ class DataFetcherTushare:
     def get_cross_sectional_state_history(self, years: int = 3):
         end = datetime.now()
         start = end - timedelta(days=years * 365)
-        cal = self._get_trade_cal()
+        cal = self._get_trade_cal(years=max(6, years))
         start_s, end_s = start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
         dates = [d for d in cal if start_s <= d <= end_s]
         logger.info("Fetching cross-section history for %d trade dates", len(dates))

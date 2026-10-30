@@ -356,10 +356,14 @@ class SentimentTracker:
         if cross_section_data and cross_section_data.get("date") == date_str:
             cross_section_history[date_str] = cross_section_data
         cross_section_history = list(cross_section_history.values())
-        margin_lookup = {date: item for date, item in (margin_lookup or {}).items() if window_start < date <= date_str}
+        # Margin balances are published the next morning, so day T scores the
+        # previous trading day's change in both daily runs and backfills.
+        prior_dates = history_frame["date"][history_frame["date"] < date_str] if not history_frame.empty else []
+        margin_as_of = prior_dates.iloc[-1] if len(prior_dates) else None
+        margin_lookup = {date: item for date, item in (margin_lookup or {}).items() if window_start < date < date_str}
         north_lookup = {date: item for date, item in (north_lookup or {}).items() if window_start < date <= date_str}
         north_date = (north_flow or {}).get("date") or str((north_flow or {}).get("timestamp") or "")[:10] or None
-        margin_date = (margin_data or {}).get("date") or None
+        margin_date = (margin_data or {}).get("date") or (margin_as_of if margin_data else None)
 
         components = {
             "market_breadth": self._score_breadth(breadth_data, breadth_history),
@@ -367,7 +371,7 @@ class SentimentTracker:
             "volume_change": self._score_volume(index_row, history_frame),
             "volatility": self._score_volatility(index_row, history_frame),
             "north_flow": self._score_north_flow(north_flow if north_date in (None, date_str) else None, history_frame, index_row, north_lookup),
-            "margin_trading": self._score_margin(margin_data if margin_date in (None, date_str) else None, margin_lookup),
+            "margin_trading": self._score_margin(margin_data if margin_date in (None, margin_as_of) else None, margin_lookup),
             "trend": self._score_trend(index_row, history_frame),
         }
 
@@ -375,6 +379,10 @@ class SentimentTracker:
         composite = self.scorer.combine_component_scores(components, weights)
         sentiment_score = round(composite["score"], 2)
         active_weight = sum(weight for name, weight in weights.items() if components[name]["available"])
+
+        def shown(name):
+            # Unavailable components keep a neutral placeholder internally; never display it as a reading.
+            return round(components[name]["score"], 2) if components[name]["available"] else None
 
         return {
             "model_version": MODEL_VERSION,
@@ -391,14 +399,14 @@ class SentimentTracker:
             "available_components": composite["available_components"],
             "component_availability": {name: bool(item["available"]) for name, item in components.items()},
             "components": {
-                "market_breadth": round(components["market_breadth"]["score"], 2),
-                "cross_section": round(components["cross_section"]["score"], 2),
-                "volume_change": round(components["volume_change"]["score"], 2),
-                "volatility": round(components["volatility"]["score"], 2),
-                "north_flow": round(components["north_flow"]["score"], 2) if components["north_flow"]["available"] else None,
-                "margin_trading": round(components["margin_trading"]["score"], 2),
-                "index_change": round(components["trend"]["score"], 2),
-                "trend": round(components["trend"]["score"], 2),
+                "market_breadth": shown("market_breadth"),
+                "cross_section": shown("cross_section"),
+                "volume_change": shown("volume_change"),
+                "volatility": shown("volatility"),
+                "north_flow": shown("north_flow"),
+                "margin_trading": shown("margin_trading"),
+                "index_change": shown("trend"),
+                "trend": shown("trend"),
             },
             "raw_data": {
                 "index_close": float(index_row.get("close", 0) or 0),
@@ -411,7 +419,7 @@ class SentimentTracker:
                 "north_source": components["north_flow"].get("source", "unknown"),
                 "margin_source": components["margin_trading"].get("source", "unknown"),
                 "north_date": north_date or (date_str if north_flow else None),
-                "margin_date": margin_date or (date_str if margin_data else None),
+                "margin_date": margin_date,
             },
         }
 
@@ -461,13 +469,14 @@ class SentimentTracker:
             if not start_str <= date_str <= end_str:
                 continue
             history_slice = index_df.iloc[: idx + 1]
+            previous_date = index_df.iloc[idx - 1]["date"] if idx > 0 else None
             result = self.calculate_sentiment_for_date(
                 date_str=date_str,
                 index_row=row,
                 breadth_data=breadth_lookup.get(date_str),
                 cross_section_data=cross_section_lookup.get(date_str),
                 north_flow=north_lookup.get(date_str),
-                margin_data=margin_lookup.get(date_str),
+                margin_data=margin_lookup.get(previous_date),
                 history_frame=history_slice,
                 breadth_history=[item for item in breadth_history if item["date"] <= date_str],
                 cross_section_history=[item for item in cross_section_history if item["date"] <= date_str],
@@ -507,7 +516,6 @@ class SentimentTracker:
             "index_data": index_df,
             "north": fetcher.get_north_flow(),
             "north_history": fetcher.get_north_flow_historical(years=2),
-            "margin": fetcher.get_margin_trading(),
             "margin_history": fetcher.get_margin_trading_historical(years=2),
         }
 
@@ -559,6 +567,7 @@ class SentimentTracker:
         latest = index_df.iloc[-1]
         north_lookup = self._build_history_lookup(components["north_history"], ["flow", "net_flow"])
         margin_lookup = self._build_history_lookup(components["margin_history"], ["margin_balance", "net_change"])
+        previous_date = index_df.iloc[-2]["date"] if len(index_df) > 1 else None
 
         result = self.calculate_sentiment_for_date(
             date_str=latest["date"],
@@ -566,7 +575,7 @@ class SentimentTracker:
             breadth_data=components["breadth"],
             cross_section_data=components["cross_section"],
             north_flow=components["north"],
-            margin_data=components["margin"],
+            margin_data=margin_lookup.get(previous_date),
             history_frame=index_df,
             breadth_history=components["breadth_history"],
             cross_section_history=components["cross_section_history"],

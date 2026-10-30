@@ -203,7 +203,8 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
             for date_field in ("date", "timestamp"):
                 with self.subTest(north_date_field=date_field):
                     north = {"net_flow": 1_000_000, date_field: "2026-05-07" if date_field == "date" else "2026-05-07 15:00:00", "source": "test"}
-                    margin = {"margin_balance": 1_000_000_000, "net_change": 1_000_000, "date": "2026-05-07", "source": "test"}
+                    # Same-day margin is not public at the close; day T must use T-1.
+                    margin = {"margin_balance": 1_000_000_000, "net_change": 1_000_000, "date": "2026-05-08", "source": "test"}
                     stale = tracker.calculate_sentiment_for_date(**arguments, north_flow=north, margin_data=margin)
 
                     self.assertFalse(stale["component_availability"]["north_flow"])
@@ -211,10 +212,10 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
                     self.assertEqual(stale["coverage"], missing["coverage"])
                     self.assertEqual(stale["sentiment_score"], missing["sentiment_score"])
                     self.assertEqual(stale["raw_data"]["north_date"], "2026-05-07")
-                    self.assertEqual(stale["raw_data"]["margin_date"], "2026-05-07")
+                    self.assertEqual(stale["raw_data"]["margin_date"], "2026-05-08")
 
                     north[date_field] = "2026-05-08" if date_field == "date" else "2026-05-08 15:00:00"
-                    margin["date"] = "2026-05-08"
+                    margin["date"] = "2026-05-07"
                     current = tracker.calculate_sentiment_for_date(**arguments, north_flow=north, margin_data=margin)
                     self.assertTrue(current["component_availability"]["north_flow"])
                     self.assertTrue(current["component_availability"]["margin_trading"])
@@ -269,6 +270,32 @@ class SentimentTrackerBackfillTests(unittest.TestCase):
 
             self.assertEqual(actual["components"], expected["components"])
             self.assertEqual(actual["sentiment_score"], expected["sentiment_score"])
+
+    def test_margin_lags_one_trading_day_in_daily_and_backfill(self):
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
+            fetcher = FakeHistoryFetcher()
+            tracker = SentimentTracker(fetcher=fetcher)
+
+            historical = tracker.backfill_history(days=1, end_date=fetcher.dates[-1])[-1]
+            daily = tracker.run()
+
+            for result in (historical, daily):
+                self.assertTrue(result["component_availability"]["margin_trading"])
+                self.assertEqual(result["raw_data"]["margin_date"], fetcher.dates[-2])
+            self.assertEqual(historical["components"], daily["components"])
+
+    def test_margin_unavailable_when_previous_day_missing(self):
+        class MissingPreviousMarginFetcher(FakeHistoryFetcher):
+            def get_margin_trading_historical(self, years=1):
+                rows = super().get_margin_trading_historical(years)
+                return [row for row in rows if row["date"] != self.dates[-2]]
+
+        with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):
+            tracker = SentimentTracker(fetcher=MissingPreviousMarginFetcher())
+            daily = tracker.run()
+
+            self.assertFalse(daily["component_availability"]["margin_trading"])
+            self.assertIsNone(daily["components"]["margin_trading"])
 
     def test_save_result_propagates_write_failures(self):
         with tempfile.TemporaryDirectory() as tmp_dir, patch("sentiment_tracker.DATA_DIR", tmp_dir):

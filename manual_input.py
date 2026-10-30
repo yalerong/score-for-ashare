@@ -55,7 +55,7 @@ def main():
     limit_down = get_int_input("跌停家数: ")
 
     print("\n--- 融资融券（可选，直接回车跳过）---")
-    margin_change_input = input("融资余额变化（亿元，负数表示减少）: ").strip()
+    margin_change_input = input("上一交易日融资余额变化（亿元，负数表示减少）: ").strip()
     has_margin = margin_change_input != ""
     margin_change = float(margin_change_input) if has_margin else 0.0
 
